@@ -50,7 +50,7 @@ python3 -m venv "$VENV_DIR"
 
 echo "Installing IronClaw core dependencies..."
 "$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install -e "$INSTALL_DIR"
+"$VENV_DIR/bin/pip" install -e "$INSTALL_DIR[all]"
 
 # 4. Create executable symlink
 echo -e "\n${YELLOW}[4/4] Creating executable link...${NC}"
