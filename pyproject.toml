@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ironclaw"
+version = "0.1.0"
+description = "IronClaw - A secure-by-design agentic AI framework"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Smodekurti", email = "smodekurti@example.com" }
+]
+dependencies = [
+    "pydantic>=2.0",
+    "fastapi>=0.100",
+    "uvicorn>=0.22",
+    "httpx>=0.24",
+    "pyngrok>=6.0",
+]
+
+[project.scripts]
+ironclaw = "ironclaw.cli.main:main"
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.100",
+    "uvicorn>=0.22"
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.1",
+    "pytest-timeout>=2.1"
+]
