@@ -18,6 +18,7 @@ dependencies = [
     "uvicorn>=0.22",
     "httpx>=0.24",
     "pyngrok>=6.0",
+    "jsonschema>=4.0",
 ]
 
 [project.scripts]
