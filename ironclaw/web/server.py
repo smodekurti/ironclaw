@@ -222,7 +222,9 @@ async def serve_ui():
         return FileResponse(Path(__file__).parent / "dashboard/dist/index.html")
     return HTMLResponse("UI not built. Run 'npm run build' in ironclaw/web/dashboard.")
 
-app.mount("/assets", StaticFiles(directory=Path(__file__).parent / "dashboard/dist/assets"), name="assets")
+_ASSETS_PATH = Path(__file__).parent / "dashboard/dist/assets"
+if _ASSETS_PATH.exists():
+    app.mount("/assets", StaticFiles(directory=_ASSETS_PATH), name="assets")
 
 
 # ---------------------------------------------------------------------------
