@@ -44,6 +44,9 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 10  # hard limit to prevent infinite agent loops
 
+HITL_PENDING: dict[str, tuple[asyncio.Event, str | None]] = {}
+
+
 
 class Agent:
     """
@@ -225,6 +228,27 @@ class Agent:
                 output=None,
                 error=f"Tool '{tc.tool_name}' not found in registry",
             )
+
+        # HITL Intercept for sensitive tools
+        if "shell" in tc.tool_name or "write" in tc.tool_name or "delete" in tc.tool_name:
+            event = asyncio.Event()
+            HITL_PENDING[tc.call_id] = (event, None)
+            ctx.record("hitl_intercept_started", call_id=tc.call_id, tool=tc.tool_name)
+            logger.warning(f"HITL Intercept triggered for {tc.tool_name} (call_id: {tc.call_id})")
+            
+            await event.wait()
+            
+            decision = HITL_PENDING[tc.call_id][1]
+            del HITL_PENDING[tc.call_id]
+            
+            if decision == "rejected":
+                ctx.record("hitl_intercept_rejected", call_id=tc.call_id)
+                return ToolResult(
+                    call_id=tc.call_id, 
+                    tool_name=tc.tool_name, 
+                    output=None, 
+                    error="Human rejected the execution of this tool."
+                )
 
         ctx.record("tool_call_start", tool=tc.tool_name, args=tc.arguments)
         t0 = time.monotonic()

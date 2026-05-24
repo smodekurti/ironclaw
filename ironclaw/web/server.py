@@ -205,6 +205,12 @@ class ScheduleRequest(BaseModel):
     cron_expr: str
     job_id: str | None = None
 
+class SkillInstallRequest(BaseModel):
+    url: str
+
+class HITLResolveRequest(BaseModel):
+    decision: str  # "approved" or "rejected"
+
 
 # ---------------------------------------------------------------------------
 # UI
@@ -370,6 +376,47 @@ async def get_audit(limit: int = 100, agent_id: str | None = None):
 async def get_audit_session(session_id: str):
     events = _audit.search({"session_id": session_id})
     return {"events": events, "count": len(events)}
+
+# ---------------------------------------------------------------------------
+# Skills API
+# ---------------------------------------------------------------------------
+@app.get("/api/skills")
+async def list_skills():
+    try:
+        from ironclaw.skills.registry import SkillRegistry
+        from ironclaw.cli.commands.skills import _DEFAULT_SKILL_DIR, _BUILTIN_DIR
+        reg = SkillRegistry()
+        reg.add_directory(_BUILTIN_DIR)
+        reg.add_directory(_DEFAULT_SKILL_DIR)
+        return {"skills": reg.summaries()}
+    except Exception as e:
+        logger.error(f"Failed to list skills: {e}")
+        return {"skills": []}
+
+@app.post("/api/skills/install")
+async def install_skill(req: SkillInstallRequest):
+    # Placeholder for actual clone logic
+    skill_name = req.url.split("/")[-1]
+    return {"status": "installed", "name": skill_name}
+
+# ---------------------------------------------------------------------------
+# HITL Intercept API
+# ---------------------------------------------------------------------------
+@app.get("/api/intercepts")
+async def list_intercepts():
+    from ironclaw.core.agent import HITL_PENDING
+    return {"pending": list(HITL_PENDING.keys())}
+
+@app.post("/api/intercepts/{call_id}/resolve")
+async def resolve_intercept(call_id: str, req: HITLResolveRequest):
+    from ironclaw.core.agent import HITL_PENDING
+    if call_id not in HITL_PENDING:
+        raise HTTPException(404, "Intercept not found")
+    
+    event, _ = HITL_PENDING[call_id]
+    HITL_PENDING[call_id] = (event, req.decision)
+    event.set()
+    return {"status": "resolved"}
 
 
 # ---------------------------------------------------------------------------

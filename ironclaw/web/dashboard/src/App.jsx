@@ -1,5 +1,20 @@
-import React, { useState, useEffect } from 'react';
-import { Terminal, Shield, MessageSquare, Activity, Settings, Maximize2, Clock, Play, StepForward, StepBack, SkipBack, SkipForward } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Terminal, Shield, MessageSquare, Activity, Settings, Maximize2, Clock, Play, StepForward, StepBack, SkipBack, SkipForward, Blocks, Download } from 'lucide-react';
+import { ReactFlow, Controls, Background, applyNodeChanges, applyEdgeChanges, addEdge } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+
+const initialNodes = [
+  { id: '1', position: { x: 100, y: 100 }, data: { label: 'Provider (Anthropic)' }, type: 'input' },
+  { id: '2', position: { x: 350, y: 100 }, data: { label: 'Agent: Web Researcher' } },
+  { id: '3', position: { x: 100, y: 250 }, data: { label: 'Tool: Web Search' } },
+  { id: '4', position: { x: 600, y: 100 }, data: { label: 'Output (Memory)' }, type: 'output' },
+];
+
+const initialEdges = [
+  { id: 'e1-2', source: '1', target: '2' },
+  { id: 'e3-2', source: '3', target: '2', animated: true },
+  { id: 'e2-4', source: '2', target: '4' },
+];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('chat');
@@ -24,7 +39,8 @@ export default function App() {
         <div className="p-4 flex flex-col gap-2 flex-1">
           <div className="text-xs uppercase tracking-widest text-gray-500 mb-2 mt-4 font-semibold">Navigation</div>
           <NavItem icon={<MessageSquare className="w-4 h-4"/>} label="Chat & Sandbox" active={activeTab==='chat'} onClick={()=>setActiveTab('chat')} />
-          <NavItem icon={<Activity className="w-4 h-4"/>} label="Node Editor" active={activeTab==='nodes'} onClick={()=>setActiveTab('nodes')} />
+          <NavItem icon={<Activity className="w-4 h-4"/>} label="Visual Node Builder" active={activeTab==='nodes'} onClick={()=>setActiveTab('nodes')} />
+          <NavItem icon={<Blocks className="w-4 h-4"/>} label="Skill Marketplace" active={activeTab==='skills'} onClick={()=>setActiveTab('skills')} />
           <NavItem icon={<Clock className="w-4 h-4"/>} label="Time-Travel Replay" active={activeTab==='replay'} onClick={()=>setActiveTab('replay')} />
           
           <div className="text-xs uppercase tracking-widest text-gray-500 mb-2 mt-8 font-semibold">Active Agents</div>
@@ -60,7 +76,8 @@ export default function App() {
         <div className="flex-1 overflow-hidden relative">
           {activeTab === 'replay' && <TimeTravelDebugger />}
           {activeTab === 'chat' && <Placeholder title="Chat Interface" desc="Agent communication and interaction interface." />}
-          {activeTab === 'nodes' && <Placeholder title="Visual Node Builder" desc="Drag and drop agents, tools, and sandboxes to build workflows." />}
+          {activeTab === 'nodes' && <VisualNodeBuilder />}
+          {activeTab === 'skills' && <SkillMarketplace />}
         </div>
       </div>
     </div>
@@ -84,6 +101,112 @@ function Placeholder({ title, desc }) {
       </div>
       <h3 className="text-2xl font-bold text-white mb-2">{title}</h3>
       <p className="text-gray-400 max-w-md">{desc}</p>
+    </div>
+  );
+}
+
+// --------------------------------------------------------
+// Visual Node Builder Component
+// --------------------------------------------------------
+function VisualNodeBuilder() {
+  const [nodes, setNodes] = useState(initialNodes);
+  const [edges, setEdges] = useState(initialEdges);
+
+  const onNodesChange = useCallback((chs) => setNodes((nds) => applyNodeChanges(chs, nds)), []);
+  const onEdgesChange = useCallback((chs) => setEdges((eds) => applyEdgeChanges(chs, eds)), []);
+  const onConnect = useCallback((params) => setEdges((eds) => addEdge(params, eds)), []);
+
+  return (
+    <div className="absolute inset-0 flex flex-col">
+      <div className="p-4 border-b border-borderDark flex gap-4 bg-surfaceDark/50">
+        <button className="px-4 py-2 bg-glass border border-glassBorder hover:bg-glassBorder text-white rounded-lg text-sm">Add Provider Node</button>
+        <button className="px-4 py-2 bg-glass border border-glassBorder hover:bg-glassBorder text-white rounded-lg text-sm">Add Tool Node</button>
+        <div className="flex-1"></div>
+        <button className="px-6 py-2 bg-accent hover:bg-accent/80 text-black font-semibold rounded-lg text-sm shadow-[0_0_15px_rgba(88,166,255,0.3)]">Deploy Flow</button>
+      </div>
+      <div className="flex-1" style={{ background: '#0d1117' }}>
+        <ReactFlow 
+          nodes={nodes} 
+          edges={edges} 
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          fitView
+          theme="dark"
+        >
+          <Background color="#30363d" gap={16} />
+          <Controls />
+        </ReactFlow>
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------
+// Skill Marketplace Component
+// --------------------------------------------------------
+function SkillMarketplace() {
+  const [skills, setSkills] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/skills', { headers: { 'Authorization': `Bearer ${localStorage.getItem('api_key') || ''}` }})
+      .then(r => r.json())
+      .then(data => setSkills(data.skills || []))
+      .catch(console.error);
+  }, []);
+
+  const installSkill = async (name) => {
+    setLoading(true);
+    try {
+      await fetch('/api/skills/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('api_key') || ''}` },
+        body: JSON.stringify({ url: `https://agentskills.io/${name}` })
+      });
+      alert(`Skill ${name} installed successfully!`);
+    } catch(e) {
+      console.error(e);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="absolute inset-0 p-8 overflow-y-auto">
+      <h2 className="text-2xl font-bold text-white mb-6">Skill Marketplace</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {skills.map((s, i) => (
+          <div key={i} className="glass-panel p-6 flex flex-col hover:border-accent/50 transition-colors">
+            <h3 className="text-lg font-bold text-white mb-2">{s.name}</h3>
+            <p className="text-sm text-gray-400 flex-1 mb-6">{s.description || 'No description provided.'}</p>
+            <div className="flex justify-between items-center mt-auto">
+              <span className="text-xs text-accent bg-[#1f3358] px-2 py-1 rounded">Local</span>
+              <button 
+                className="flex items-center gap-2 text-sm text-accent hover:text-white transition-colors"
+                onClick={() => installSkill(s.name)}
+                disabled={loading}
+              >
+                <Download className="w-4 h-4" /> Install Update
+              </button>
+            </div>
+          </div>
+        ))}
+        {/* Mock remote skill */}
+        <div className="glass-panel p-6 flex flex-col hover:border-accent/50 transition-colors border-dashed border-gray-600">
+          <h3 className="text-lg font-bold text-white mb-2">jira-manager <span className="text-xs ml-2 text-accent2 bg-accent2/20 px-2 py-1 rounded">Remote</span></h3>
+          <p className="text-sm text-gray-400 flex-1 mb-6">Manage Jira tickets, transition states, and add comments.</p>
+          <div className="flex justify-between items-center mt-auto">
+            <span className="text-xs text-gray-500">agentskills.io</span>
+            <button 
+              className="flex items-center gap-2 text-sm text-accent2 hover:text-white transition-colors"
+              onClick={() => installSkill('jira-manager')}
+              disabled={loading}
+            >
+              <Download className="w-4 h-4" /> 1-Click Install
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -133,7 +256,6 @@ function TimeTravelDebugger() {
       </div>
 
       <div className="flex-1 flex gap-6 overflow-hidden">
-        {/* Timeline */}
         <div className="w-80 glass-panel p-4 flex flex-col overflow-y-auto shadow-inner">
           <h3 className="font-semibold text-white mb-4 uppercase tracking-widest text-xs">Execution Timeline</h3>
           {events.length === 0 && <div className="text-sm text-gray-500 italic">No events loaded.</div>}
@@ -150,7 +272,6 @@ function TimeTravelDebugger() {
           </div>
         </div>
 
-        {/* Payload Inspector */}
         <div className="flex-1 glass-panel p-6 flex flex-col shadow-inner relative overflow-hidden">
           <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')] opacity-50 z-0 pointer-events-none"></div>
           
@@ -170,7 +291,6 @@ function TimeTravelDebugger() {
               </div>
             )}
 
-            {/* Playback Controls */}
             <div className="mt-6 flex items-center justify-center gap-4 bg-surfaceDark/80 p-3 rounded-xl border border-borderDark shadow-xl backdrop-blur-md w-max mx-auto">
               <button className="p-2 hover:bg-glass rounded-lg transition-colors text-gray-400 hover:text-white" onClick={() => setCurrentIndex(0)} disabled={events.length===0}><SkipBack className="w-5 h-5"/></button>
               <button className="p-2 hover:bg-glass rounded-lg transition-colors text-gray-400 hover:text-white" onClick={() => setCurrentIndex(c => Math.max(0, c-1))} disabled={events.length===0}><StepBack className="w-5 h-5"/></button>
