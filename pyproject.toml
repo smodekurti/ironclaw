@@ -29,6 +29,7 @@ dependencies = [
     "httpx>=0.27",
     "jsonschema>=4.21",
     "tomli>=2.0; python_version < '3.11'",
+    "eval_type_backport; python_version < '3.10'",
 ]
 
 [project.optional-dependencies]
