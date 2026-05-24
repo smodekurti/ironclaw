@@ -7,7 +7,7 @@ name = "ironclaw"
 version = "0.1.0"
 description = "IronClaw - A secure-by-design agentic AI framework"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
     { name = "Smodekurti", email = "smodekurti@example.com" }
