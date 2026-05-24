@@ -93,10 +93,11 @@ def _cmd_info(_args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         from ironclaw.web.server import serve
-    except ImportError:
+    except ImportError as e:
         fmt.error(
             "Web server dependencies missing.\n"
-            "  Install them with: pip install 'ironclaw[web]'"
+            "  Install them with: pip install 'ironclaw[web]'\n"
+            f"  (Underlying error: {e})"
         )
         return 1
 
