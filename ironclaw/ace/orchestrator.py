@@ -312,8 +312,8 @@ def build_creator_agent(provisioner, provider_id: str = "anthropic", model: str 
         name="spawn_new_agent",
         description=SPAWN_TOOL_SCHEMA["description"],
         fn=_spawn,
-        schema=SPAWN_TOOL_SCHEMA["input_schema"],
-        capabilities_required=["ace:spawn"],
+        parameters=SPAWN_TOOL_SCHEMA["input_schema"],
+        requires="ace:spawn",
         dangerous=False,
     ))
 
