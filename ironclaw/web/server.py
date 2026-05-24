@@ -219,7 +219,8 @@ class HITLResolveRequest(BaseModel):
 @app.get("/", include_in_schema=False)
 async def serve_ui():
     if _UI_PATH.exists():
-    return FileResponse(Path(__file__).parent / "dashboard/dist/index.html")
+        return FileResponse(Path(__file__).parent / "dashboard/dist/index.html")
+    return HTMLResponse("UI not built. Run 'npm run build' in ironclaw/web/dashboard.")
 
 app.mount("/assets", StaticFiles(directory=Path(__file__).parent / "dashboard/dist/assets"), name="assets")
 
