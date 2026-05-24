@@ -307,14 +307,15 @@ def build_creator_agent(provisioner, provider_id: str = "anthropic", model: str 
         result = await execute_spawn_tool({"spec": spec, "dry_run": dry_run}, provisioner)
         return json.dumps(result, indent=2)
 
-    registry.register(
+    from ironclaw.tools.registry import ToolSpec
+    registry.register(ToolSpec(
         name="spawn_new_agent",
         description=SPAWN_TOOL_SCHEMA["description"],
         fn=_spawn,
         schema=SPAWN_TOOL_SCHEMA["input_schema"],
         capabilities_required=["ace:spawn"],
         dangerous=False,
-    )
+    ))
 
     return Agent(
         agent_id="creator-agent",
