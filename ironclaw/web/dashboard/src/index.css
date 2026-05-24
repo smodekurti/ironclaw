@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-bgDark text-[#c9d1d9] font-sans h-screen overflow-hidden m-0 p-0;
+  }
+}
+
+@layer utilities {
+  .glassmorphic {
+    @apply bg-glass border border-glassBorder backdrop-blur-xl rounded-xl shadow-2xl;
+  }
+  .glass-panel {
+    @apply bg-surfaceDark/80 border border-borderDark backdrop-blur-md rounded-xl;
+  }
+  .nav-item {
+    @apply flex items-center gap-2 px-3 py-2 cursor-pointer rounded-lg mx-1 transition-colors hover:bg-[#21262d] text-[#c9d1d9];
+  }
+  .nav-item.active {
+    @apply bg-[#1f3358] text-accent;
+  }
+}

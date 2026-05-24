@@ -1,0 +1,96 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ironclaw"
+version = "0.2.0"
+description = "Secure-by-design agentic framework — multi-agent orchestration with sandboxed tools, capability scoping, prompt-injection defence, append-only audit logging, skills (agentskills.io), and 15+ LLM providers."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+authors = [{ name = "IronClaw Contributors" }]
+keywords = ["agents", "llm", "ai", "security", "agentic", "orchestration", "skills"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core dependencies only — everything else is optional
+dependencies = [
+    "httpx>=0.27",
+    "jsonschema>=4.21",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+# Individual provider packages
+anthropic  = ["anthropic>=0.28"]
+openai     = ["openai>=1.30"]
+gemini     = ["google-generativeai>=0.8"]
+cohere     = ["cohere>=5.0"]
+bedrock    = ["boto3>=1.34"]
+# Groq, Mistral, Together, Perplexity, xAI, Fireworks, DeepSeek, Cerebras, LM Studio
+# all use the openai package as their client (OpenAI-compatible APIs)
+groq       = ["openai>=1.30"]
+mistral    = ["openai>=1.30"]
+together   = ["openai>=1.30"]
+
+# Web server
+web        = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "apscheduler>=3.10", "pyngrok>=7.0.0"]
+
+# All cloud providers + web (recommended install)
+all = [
+    "anthropic>=0.28",
+    "openai>=1.30",
+    "google-generativeai>=0.8",
+    "cohere>=5.0",
+    "boto3>=1.34",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "apscheduler>=3.10",
+    "pyngrok>=7.0.0",
+]
+
+# Development
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "anthropic>=0.28",
+    "openai>=1.30",
+    "google-generativeai>=0.8",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+ironclaw = "ironclaw.cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ironclaw"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths    = ["tests"]
+
+[tool.ruff]
+line-length    = 100
+target-version = "py39"
+select         = ["E", "F", "I", "UP", "B", "SIM"]
+ignore         = ["E501"]
+
+[tool.mypy]
+python_version        = "3.11"
+strict                = false
+ignore_missing_imports = true

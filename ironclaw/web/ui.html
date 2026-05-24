@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IronClaw — Agent Control Panel</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --accent:   #58a6ff;
+    --accent2:  #3fb950;
+    --danger:   #f85149;
+    --warn:     #d29922;
+    --text:     #c9d1d9;
+    --muted:    #6e7681;
+    --user-bg:  #1c2a3a;
+    --agent-bg: #1a2b1e;
+    --tool-bg:  #2a1f0e;
+    --err-bg:   #2b1516;
+    --radius:   8px;
+    --font:     'Segoe UI', system-ui, -apple-system, sans-serif;
+    --mono:     'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; height: 100vh; display: flex; overflow: hidden; }
+
+  /* ---- Sidebar ---- */
+  #sidebar {
+    width: 240px; min-width: 200px; background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  #sidebar-header {
+    padding: 16px 12px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  #sidebar-header .logo { font-size: 20px; }
+  #sidebar-header .brand { font-weight: 700; font-size: 15px; color: var(--accent); letter-spacing: .5px; }
+  #sidebar-header .version { font-size: 11px; color: var(--muted); margin-left: auto; }
+
+  .nav-section { padding: 10px 8px 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px; cursor: pointer; border-radius: var(--radius); margin: 1px 4px;
+    transition: background .12s; color: var(--text); user-select: none;
+  }
+  .nav-item:hover { background: #21262d; }
+  .nav-item.active { background: #1f3358; color: var(--accent); }
+  .nav-item .icon { width: 16px; text-align: center; flex-shrink: 0; }
+  .nav-item .label { flex: 1; }
+  .nav-item .badge { background: var(--border); color: var(--muted); font-size: 10px; padding: 1px 5px; border-radius: 99px; }
+
+  #agent-list { overflow-y: auto; flex: 1; }
+  .agent-entry {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; cursor: pointer; border-radius: var(--radius); margin: 1px 4px;
+    transition: background .12s;
+  }
+  .agent-entry:hover { background: #21262d; }
+  .agent-entry.active { background: #1a2f4a; }
+  .agent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); flex-shrink: 0; }
+  .agent-dot.offline { background: var(--muted); }
+  .agent-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-del { color: var(--muted); font-size: 11px; opacity: 0; transition: opacity .1s; }
+  .agent-entry:hover .agent-del { opacity: 1; }
+
+  #sidebar-bottom { padding: 8px; border-top: 1px solid var(--border); }
+  .btn-full { width: 100%; padding: 7px; background: var(--accent); color: #000; border: none; border-radius: var(--radius); cursor: pointer; font-weight: 600; font-size: 13px; transition: opacity .12s; }
+  .btn-full:hover { opacity: .85; }
+
+  /* ---- Main panel ---- */
+  #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ---- Tab bar ---- */
+  #tabs {
+    display: flex; gap: 0; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+  }
+  .tab {
+    padding: 10px 16px; cursor: pointer; font-size: 13px; color: var(--muted);
+    border-bottom: 2px solid transparent; transition: color .12s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ---- Panels ---- */
+  .panel { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+  .panel.active { display: flex; }
+
+  /* ---- Chat panel ---- */
+  #chat-header {
+    padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  }
+  #chat-agent-name { font-weight: 600; font-size: 15px; }
+  #chat-model { color: var(--muted); font-size: 12px; }
+  #chat-caps { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+  .cap-chip { background: #1f3358; color: var(--accent); font-size: 10px; padding: 2px 7px; border-radius: 99px; }
+  #btn-clear-history { background: none; border: 1px solid var(--border); color: var(--muted); padding: 3px 8px; border-radius: var(--radius); cursor: pointer; font-size: 12px; transition: color .1s; }
+  #btn-clear-history:hover { color: var(--danger); border-color: var(--danger); }
+
+  #messages {
+    flex: 1; overflow-y: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: var(--radius); line-height: 1.55; position: relative; }
+  .msg.user   { align-self: flex-end; background: var(--user-bg); border: 1px solid #1d3454; }
+  .msg.agent  { align-self: flex-start; background: var(--agent-bg); border: 1px solid #1a3320; }
+  .msg.error  { align-self: flex-start; background: var(--err-bg); border: 1px solid #4a1a1a; color: var(--danger); }
+  .msg.system { align-self: center; background: none; color: var(--muted); font-size: 12px; font-style: italic; border: none; padding: 2px 0; }
+  .msg-role { font-size: 10px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
+  .msg-text { white-space: pre-wrap; word-break: break-word; }
+  .cursor { display: inline-block; width: 2px; height: 14px; background: var(--accent); margin-left: 2px; animation: blink .7s step-end infinite; vertical-align: middle; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  #input-row {
+    padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--border);
+    display: flex; gap: 8px; flex-shrink: 0;
+  }
+  #chat-input {
+    flex: 1; background: #21262d; color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 9px 12px; font-family: var(--font); font-size: 14px;
+    resize: none; line-height: 1.4; outline: none; transition: border-color .12s;
+  }
+  #chat-input:focus { border-color: var(--accent); }
+  #btn-send {
+    background: var(--accent); color: #000; border: none; border-radius: var(--radius);
+    padding: 8px 16px; cursor: pointer; font-weight: 700; font-size: 14px; transition: opacity .12s; flex-shrink: 0;
+  }
+  #btn-send:hover { opacity: .85; }
+  #btn-send:disabled { opacity: .4; cursor: default; }
+
+  /* ---- Create Agent panel ---- */
+  #create-panel { padding: 24px; overflow-y: auto; }
+  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; max-width: 600px; }
+  .form-card h2 { font-size: 16px; margin-bottom: 20px; color: var(--accent); }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .5px; }
+  .form-group input, .form-group select, .form-group textarea {
+    width: 100%; background: #21262d; color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 10px; font-family: var(--font); font-size: 13px; outline: none;
+    transition: border-color .12s;
+  }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent); }
+  .form-group textarea { resize: vertical; min-height: 70px; }
+  .form-group select option { background: #21262d; }
+  .caps-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cap-toggle {
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 99px; cursor: pointer;
+    font-size: 12px; color: var(--muted); transition: all .12s; user-select: none;
+  }
+  .cap-toggle.on { background: #1f3358; color: var(--accent); border-color: var(--accent); }
+  .tool-toggle {
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 99px; cursor: pointer;
+    font-size: 12px; color: var(--muted); transition: all .12s; user-select: none;
+  }
+  .tool-toggle.on { background: #1a2f1a; color: var(--accent2); border-color: var(--accent2); }
+  .btn-primary { background: var(--accent); color: #000; border: none; border-radius: var(--radius); padding: 9px 20px; cursor: pointer; font-weight: 700; font-size: 13px; transition: opacity .12s; }
+  .btn-primary:hover { opacity: .85; }
+  .form-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  #create-status { margin-top: 12px; font-size: 13px; }
+  #create-status.ok  { color: var(--accent2); }
+  #create-status.err { color: var(--danger); }
+
+  /* ---- Audit log panel ---- */
+  #audit-panel { display: flex; flex-direction: column; overflow: hidden; }
+  #audit-toolbar { padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  #audit-filter { background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 10px; font-size: 12px; outline: none; width: 200px; }
+  #audit-filter:focus { border-color: var(--accent); }
+  .btn-sm { background: none; border: 1px solid var(--border); color: var(--muted); padding: 4px 10px; border-radius: var(--radius); cursor: pointer; font-size: 12px; transition: all .1s; }
+  .btn-sm:hover { color: var(--text); border-color: var(--text); }
+  #audit-count { margin-left: auto; color: var(--muted); font-size: 12px; }
+  #audit-body { flex: 1; overflow-y: auto; font-family: var(--mono); font-size: 12px; }
+  .audit-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 16px; border-bottom: 1px solid #1a1e24; cursor: pointer; transition: background .08s; }
+  .audit-row:hover { background: #161b22; }
+  .audit-ts { color: var(--muted); flex-shrink: 0; width: 90px; }
+  .audit-event { flex-shrink: 0; width: 220px; }
+  .audit-event.tool_call_start   { color: #79c0ff; }
+  .audit-event.tool_call_success { color: var(--accent2); }
+  .audit-event.tool_call_error   { color: var(--danger); }
+  .audit-event.injection_blocked { color: var(--warn); }
+  .audit-event.agent_handoff     { color: #d2a8ff; }
+  .audit-event.capability_denied { color: var(--danger); }
+  .audit-event.agent_reply       { color: var(--accent2); }
+  .audit-meta { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .audit-detail {
+    padding: 8px 16px 8px 40px; background: #0d1117; border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: pre-wrap;
+    display: none;
+  }
+
+  /* ---- Orchestrator panel ---- */
+  #orch-panel { padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+  .orch-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+  .orch-card h3 { font-size: 14px; color: var(--accent); margin-bottom: 14px; }
+  .step-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .step-row { display: flex; gap: 8px; align-items: center; }
+  .step-row input, .step-row select { background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; font-size: 12px; outline: none; }
+  .step-row .agent-select { width: 140px; }
+  .step-row .tmpl-input { flex: 1; }
+  .step-row .btn-del-step { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; }
+  .step-row .btn-del-step:hover { color: var(--danger); }
+  .btn-add-step { background: none; border: 1px dashed var(--border); color: var(--muted); padding: 5px 12px; border-radius: var(--radius); cursor: pointer; font-size: 12px; }
+  .btn-add-step:hover { border-color: var(--accent); color: var(--accent); }
+  .orch-input { width: 100%; background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; font-size: 13px; font-family: var(--font); outline: none; margin-bottom: 10px; }
+  .orch-input:focus { border-color: var(--accent); }
+  #orch-result { background: #0d1117; border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-family: var(--mono); font-size: 12px; color: var(--muted); min-height: 60px; white-space: pre-wrap; }
+  .task-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .task-row .agent-select { width: 140px; background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; font-size: 12px; outline: none; }
+  .task-row .task-input { flex: 1; background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; font-size: 12px; outline: none; }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+  /* empty state */
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: var(--muted); gap: 10px; }
+  .empty-state .icon { font-size: 48px; opacity: .3; }
+  .empty-state p { font-size: 14px; }
+
+  /* toast */
+  #toast {
+    position: fixed; bottom: 20px; right: 20px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 16px;
+    font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 999;
+  }
+  #toast.show { opacity: 1; }
+  #toast.ok  { border-color: var(--accent2); color: var(--accent2); }
+  #toast.err { border-color: var(--danger); color: var(--danger); }
+</style>
+</head>
+<body>
+
+<!-- ========================= SIDEBAR ========================= -->
+<div id="sidebar">
+  <div id="sidebar-header">
+    <span class="logo">🦾</span>
+    <span class="brand">IronClaw</span>
+    <span class="version">v0.1</span>
+  </div>
+
+  <div class="nav-section">Navigation</div>
+  <div class="nav-item active" onclick="showTab('chat-tab','chat')" id="nav-chat">
+    <span class="icon">💬</span><span class="label">Chat</span>
+  </div>
+  <div class="nav-item" onclick="showTab('audit-tab','audit')" id="nav-audit">
+    <span class="icon">🔍</span><span class="label">Audit Log</span>
+  </div>
+  <div class="nav-item" onclick="showTab('orch-tab','orch')" id="nav-orch">
+    <span class="icon">⚡</span><span class="label">Orchestrator</span>
+  </div>
+  <div class="nav-item" onclick="showTab('gw-tab','gw')" id="nav-gw">
+    <span class="icon">📡</span><span class="label">Gateways</span>
+  </div>
+
+  <div class="nav-section">Agents</div>
+  <div id="agent-list"></div>
+
+  <div id="sidebar-bottom">
+    <button class="btn-full" onclick="showTab('create-tab','create')">＋ New Agent</button>
+  </div>
+</div>
+
+<!-- ========================= MAIN ========================= -->
+<div id="main">
+  <div id="tabs">
+    <div class="tab active" id="chat-tab"    onclick="activateTab('chat')">💬 Chat</div>
+    <div class="tab"        id="audit-tab"   onclick="activateTab('audit')">🔍 Audit Log</div>
+    <div class="tab"        id="orch-tab"    onclick="activateTab('orch')">⚡ Orchestrator</div>
+    <div class="tab"        id="create-tab"  onclick="activateTab('create')">＋ New Agent</div>
+    <div class="tab"        id="gw-tab"      onclick="activateTab('gw')">📡 Gateways</div>
+  </div>
+
+  <!-- ---- CHAT ---- -->
+  <div class="panel active" id="chat-panel">
+    <div id="chat-header">
+      <div id="chat-agent-name" style="color:var(--muted)">Select an agent →</div>
+      <div id="chat-model"></div>
+      <div id="chat-caps"></div>
+      <button id="btn-clear-history" onclick="clearHistory()" style="display:none">Clear history</button>
+    </div>
+    <div id="messages">
+      <div class="empty-state">
+        <div class="icon">🦾</div>
+        <p>Select an agent from the sidebar or create one to start chatting.</p>
+      </div>
+    </div>
+    <div id="input-row">
+      <textarea id="chat-input" rows="1" placeholder="Type a message… (Shift+Enter for newline, Enter to send)" disabled></textarea>
+      <button id="btn-send" disabled onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+
+  <!-- ---- AUDIT ---- -->
+  <div class="panel" id="audit-panel">
+    <div id="audit-toolbar">
+      <input id="audit-filter" placeholder="Filter by event…" oninput="filterAudit(this.value)">
+      <select id="audit-agent-filter" onchange="filterAudit()" style="background:#21262d;color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px;font-size:12px;outline:none;">
+        <option value="">All agents</option>
+      </select>
+      <button class="btn-sm" onclick="loadAudit()">↻ Refresh</button>
+      <span id="audit-count"></span>
+    </div>
+    <div id="audit-body"></div>
+  </div>
+
+  <!-- ---- ORCHESTRATOR ---- -->
+  <div class="panel" id="orch-panel">
+    <div class="orch-card">
+      <h3>🔗 Pipeline — sequential agent chain</h3>
+      <div class="step-list" id="pipeline-steps">
+        <div class="step-row">
+          <select class="agent-select pipeline-agent"></select>
+          <input class="tmpl-input" placeholder="Prompt template (use {previous}) — leave blank to pass output verbatim">
+          <button class="btn-del-step" onclick="delStep(this)">✕</button>
+        </div>
+      </div>
+      <button class="btn-add-step" onclick="addStep()">＋ Add step</button>
+      <br><br>
+      <input class="orch-input" id="pipeline-input" placeholder="Initial input to the first agent…">
+      <button class="btn-primary" onclick="runPipeline()">▶ Run Pipeline</button>
+    </div>
+
+    <div class="orch-card">
+      <h3>⚡ Parallel — fan out to multiple agents</h3>
+      <div id="parallel-tasks">
+        <div class="task-row">
+          <select class="agent-select parallel-agent"></select>
+          <input class="task-input" placeholder="Input for this agent…">
+          <button class="btn-del-step" onclick="this.parentElement.remove()">✕</button>
+        </div>
+      </div>
+      <button class="btn-add-step" onclick="addParallelTask()">＋ Add task</button>
+      <br><br>
+      <button class="btn-primary" onclick="runParallel()">▶ Run Parallel</button>
+    </div>
+
+    <div class="orch-card">
+      <h3>📊 Result</h3>
+      <div id="orch-result">Run a pipeline or parallel task to see results here.</div>
+    </div>
+  </div>
+
+  <!-- ---- CREATE AGENT ---- -->
+  <div class="panel" id="create-panel">
+    <div class="form-card">
+      <h2>＋ Create New Agent</h2>
+
+      <div class="form-group">
+        <label>Agent ID *</label>
+        <input id="f-id" placeholder="e.g. researcher" autocomplete="off">
+        <div class="form-hint">Unique snake_case identifier</div>
+      </div>
+
+      <div class="form-group">
+        <label>Display Name</label>
+        <input id="f-name" placeholder="e.g. Web Researcher">
+      </div>
+
+      <div class="form-group">
+        <label>System Prompt</label>
+        <textarea id="f-prompt" rows="3" placeholder="You are a helpful assistant…"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label>LLM Provider</label>
+        <select id="f-provider" onchange="onProviderChange()">
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="openai">OpenAI</option>
+          <option value="ollama">Ollama (local)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Model</label>
+        <select id="f-model">
+          <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+          <option value="claude-opus-4-6">claude-opus-4-6</option>
+          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5-20251001</option>
+        </select>
+      </div>
+
+      <div class="form-group" id="f-apikey-group">
+        <label>API Key <span style="color:var(--muted)">(leave blank to use env var)</span></label>
+        <input id="f-apikey" type="password" placeholder="sk-ant-…">
+      </div>
+
+      <div class="form-group">
+        <label>Capabilities</label>
+        <div class="caps-grid" id="caps-grid">
+          <div class="cap-toggle" data-cap="web:search"  onclick="toggleCap(this)">web:search</div>
+          <div class="cap-toggle" data-cap="web:fetch"   onclick="toggleCap(this)">web:fetch</div>
+          <div class="cap-toggle" data-cap="file:read"   onclick="toggleCap(this)">file:read</div>
+          <div class="cap-toggle" data-cap="file:write"  onclick="toggleCap(this)">file:write</div>
+          <div class="cap-toggle" data-cap="shell:execute" onclick="toggleCap(this)">shell:execute</div>
+          <div class="cap-toggle" data-cap="*"           onclick="toggleCap(this)" style="border-color:var(--danger);color:var(--danger)">* (all)</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Tools to load</label>
+        <div class="caps-grid">
+          <div class="tool-toggle" data-tool="web"        onclick="toggleTool(this)">🌐 Web</div>
+          <div class="tool-toggle" data-tool="filesystem" onclick="toggleTool(this)">📁 Filesystem</div>
+          <div class="tool-toggle" data-tool="shell"      onclick="toggleTool(this)">💻 Shell</div>
+        </div>
+      </div>
+
+      <button class="btn-primary" onclick="createAgent()">Create Agent</button>
+      <div id="create-status"></div>
+    </div>
+  </div>
+</div>
+
+  <!-- ---- GATEWAYS ---- -->
+  <div class="panel" id="gw-panel">
+    <div style="padding:24px;overflow-y:auto;display:flex;flex-direction:column;gap:20px;">
+
+      <!-- Status -->
+      <div class="orch-card">
+        <h3 style="display:flex;align-items:center;justify-content:space-between">
+          📡 Active Gateways
+          <button class="btn-sm" onclick="loadGatewayStatus()">↻ Refresh</button>
+        </h3>
+        <div id="gw-status-body" style="font-family:var(--mono);font-size:12px;color:var(--muted);padding-top:8px">
+          Click refresh to check gateway status.
+        </div>
+      </div>
+
+      <!-- Telegram -->
+      <div class="orch-card">
+        <h3>🤖 Telegram Bot</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div>
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Bot Token *</label>
+            <input id="tg-token" type="password" class="orch-input" style="margin:0" placeholder="123456:ABC-DEF…">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Webhook URL (optional)</label>
+            <input id="tg-webhook" class="orch-input" style="margin:0" placeholder="https://your-domain.com">
+          </div>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Allowed Chat IDs (comma-separated, blank = all)</label>
+          <input id="tg-allowed" class="orch-input" style="margin:0" placeholder="123456789, 987654321">
+        </div>
+        <button class="btn-primary" onclick="setupTelegram()">▶ Connect Telegram</button>
+        <div id="tg-status" style="margin-top:8px;font-size:12px"></div>
+      </div>
+
+      <!-- WhatsApp -->
+      <div class="orch-card">
+        <h3>💬 WhatsApp Business Cloud</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div>
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Access Token *</label>
+            <input id="wa-token" type="password" class="orch-input" style="margin:0" placeholder="EAABs…">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Phone Number ID *</label>
+            <input id="wa-phone-id" class="orch-input" style="margin:0" placeholder="1234567890">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div>
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Webhook Verify Token *</label>
+            <input id="wa-verify" class="orch-input" style="margin:0" placeholder="my-secret-verify-token">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">App Secret (for signature validation)</label>
+            <input id="wa-secret" type="password" class="orch-input" style="margin:0" placeholder="optional">
+          </div>
+        </div>
+        <div style="background:#0d1117;border:1px solid var(--border);border-radius:var(--radius);padding:10px;font-size:11px;color:var(--muted);margin-bottom:10px;font-family:var(--mono)">
+          Set your Meta webhook URL to:<br>
+          <span style="color:var(--accent)">https://YOUR-DOMAIN/webhook/whatsapp</span><br>
+          Subscribed fields: <span style="color:var(--accent2)">messages</span>
+        </div>
+        <button class="btn-primary" onclick="setupWhatsApp()">▶ Connect WhatsApp</button>
+        <div id="wa-status" style="margin-top:8px;font-size:12px"></div>
+      </div>
+
+      <!-- iMessage -->
+      <div class="orch-card">
+        <h3>🍎 iMessage <span style="font-size:11px;color:var(--muted);font-weight:normal">(macOS only)</span></h3>
+        <div style="background:#1a2f1a;border:1px solid #1d3d1d;border-radius:var(--radius);padding:10px;font-size:12px;color:var(--accent2);margin-bottom:12px">
+          Requires: macOS, Messages app open, Full Disk Access granted to this app.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div>
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Poll interval (seconds)</label>
+            <input id="im-poll" type="number" class="orch-input" style="margin:0" value="3" min="1" max="60">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Allowed handles (comma-sep, blank = all)</label>
+            <input id="im-allowed" class="orch-input" style="margin:0" placeholder="+14155551234, user@example.com">
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:10px;cursor:pointer">
+          <input type="checkbox" id="im-sms-fallback"> SMS fallback when iMessage unavailable
+        </label>
+        <button class="btn-primary" onclick="setupiMessage()">▶ Connect iMessage</button>
+        <div id="im-status" style="margin-top:8px;font-size:12px"></div>
+      </div>
+
+    </div>
+  </div>
+
+<div id="toast"></div>
+
+<script>
+// ============================================================
+// State
+// ============================================================
+let agents = {};       // id → {name, model, capabilities, ...}
+let currentAgent = null;
+let chatStreaming = false;
+let allAuditEntries = [];
+
+const API = '';  // same origin
+
+// ============================================================
+// Init
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  loadAgents();
+  setupChatInput();
+  setInterval(loadAgents, 15000);  // poll every 15s
+});
+
+// ============================================================
+// Tabs
+// ============================================================
+function activateTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(name + '-tab').classList.add('active');
+  document.getElementById(name + '-panel').classList.add('active');
+
+  // Nav highlight
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const navMap = { chat: 'nav-chat', audit: 'nav-audit', orch: 'nav-orch' };
+  if (navMap[name]) document.getElementById(navMap[name]).classList.add('active');
+
+  if (name === 'audit') loadAudit();
+  if (name === 'orch')  refreshOrchSelects();
+}
+
+function showTab(tabId, panelName) { activateTab(panelName); }
+
+// ============================================================
+// Agents
+// ============================================================
+async function loadAgents() {
+  try {
+    const data = await api('/api/agents');
+    agents = {};
+    for (const a of (data.agents || [])) {
+      agents[a.id] = a;
+    }
+    renderAgentList();
+    updateAgentBadge();
+  } catch(e) { /* server may not be up yet */ }
+}
+
+function renderAgentList() {
+  const list = document.getElementById('agent-list');
+  list.innerHTML = '';
+  const ids = Object.keys(agents);
+  if (!ids.length) {
+    list.innerHTML = '<div style="padding:8px 16px;color:var(--muted);font-size:12px">No agents yet</div>';
+    return;
+  }
+  for (const id of ids) {
+    const a = agents[id];
+    const div = document.createElement('div');
+    div.className = 'agent-entry' + (currentAgent === id ? ' active' : '');
+    div.dataset.id = id;
+    div.innerHTML = `
+      <div class="agent-dot"></div>
+      <div class="agent-name" title="${a.name}">${a.name || id}</div>
+      <div class="agent-del" onclick="deleteAgent(event,'${id}')">✕</div>`;
+    div.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('agent-del')) selectAgent(id);
+    });
+    list.appendChild(div);
+  }
+}
+
+function updateAgentBadge() {
+  const count = Object.keys(agents).length;
+  // update orch selects too
+  refreshOrchSelects();
+}
+
+function selectAgent(id) {
+  currentAgent = id;
+  document.querySelectorAll('.agent-entry').forEach(e => {
+    e.classList.toggle('active', e.dataset.id === id);
+  });
+  activateTab('chat');
+  renderChatHeader();
+  loadHistory();
+}
+
+function renderChatHeader() {
+  if (!currentAgent || !agents[currentAgent]) return;
+  const a = agents[currentAgent];
+  document.getElementById('chat-agent-name').textContent = a.name || currentAgent;
+  document.getElementById('chat-agent-name').style.color = 'var(--text)';
+  document.getElementById('chat-model').textContent = a.model || '';
+  const capsEl = document.getElementById('chat-caps');
+  capsEl.innerHTML = (a.capabilities || []).slice(0,5).map(c =>
+    `<span class="cap-chip">${c}</span>`).join('');
+  document.getElementById('btn-clear-history').style.display = 'inline-block';
+  document.getElementById('chat-input').disabled = false;
+  document.getElementById('btn-send').disabled = false;
+}
+
+async function deleteAgent(e, id) {
+  e.stopPropagation();
+  if (!confirm(`Delete agent "${id}"?`)) return;
+  await api('/api/agents/' + id, 'DELETE');
+  if (currentAgent === id) {
+    currentAgent = null;
+    resetChatUI();
+  }
+  await loadAgents();
+  toast('Agent deleted', 'ok');
+}
+
+function resetChatUI() {
+  document.getElementById('chat-agent-name').textContent = 'Select an agent →';
+  document.getElementById('chat-agent-name').style.color = 'var(--muted)';
+  document.getElementById('chat-model').textContent = '';
+  document.getElementById('chat-caps').innerHTML = '';
+  document.getElementById('btn-clear-history').style.display = 'none';
+  document.getElementById('chat-input').disabled = true;
+  document.getElementById('btn-send').disabled = true;
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = '<div class="empty-state"><div class="icon">🦾</div><p>Select an agent from the sidebar or create one to start chatting.</p></div>';
+}
+
+// ============================================================
+// Chat
+// ============================================================
+function setupChatInput() {
+  const inp = document.getElementById('chat-input');
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+    // Auto-resize
+    setTimeout(() => {
+      inp.style.height = 'auto';
+      inp.style.height = Math.min(inp.scrollHeight, 140) + 'px';
+    }, 0);
+  });
+}
+
+async function loadHistory() {
+  if (!currentAgent) return;
+  try {
+    const data = await api(`/api/agents/${currentAgent}/history?limit=80`);
+    const msgs = document.getElementById('messages');
+    msgs.innerHTML = '';
+    for (const m of (data.messages || [])) {
+      if (m.role === 'system') continue;
+      addMessageBubble(m.role === 'user' ? 'user' : 'agent', m.content);
+    }
+    if (!data.messages || !data.messages.length) {
+      msgs.innerHTML = '<div class="msg system">No conversation history. Say something!</div>';
+    }
+    scrollMessages();
+  } catch(e) {}
+}
+
+async function sendMessage() {
+  if (!currentAgent || chatStreaming) return;
+  const inp = document.getElementById('chat-input');
+  const text = inp.value.trim();
+  if (!text) return;
+
+  inp.value = '';
+  inp.style.height = 'auto';
+  chatStreaming = true;
+  document.getElementById('btn-send').disabled = true;
+
+  addMessageBubble('user', text);
+
+  // Agent bubble with cursor
+  const agentBubble = addMessageBubble('agent', '');
+  const textEl = agentBubble.querySelector('.msg-text');
+  const cursor = document.createElement('span');
+  cursor.className = 'cursor';
+  textEl.appendChild(cursor);
+  scrollMessages();
+
+  try {
+    const resp = await fetch(`${API}/api/agents/${currentAgent}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      textEl.textContent = '⚠ ' + (err.detail || 'Error');
+      agentBubble.classList.add('error');
+    } else {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.type === 'token') {
+              fullText += evt.text;
+              textEl.textContent = fullText;
+              textEl.appendChild(cursor);
+              scrollMessages();
+            } else if (evt.type === 'done') {
+              textEl.textContent = evt.message.content;
+            } else if (evt.type === 'error') {
+              textEl.textContent = '⚠ ' + evt.message;
+              agentBubble.classList.remove('agent');
+              agentBubble.classList.add('error');
+            }
+          } catch(e) {}
+        }
+      }
+    }
+  } catch(e) {
+    textEl.textContent = '⚠ Connection error: ' + e.message;
+    agentBubble.classList.add('error');
+  }
+
+  cursor.remove();
+  chatStreaming = false;
+  document.getElementById('btn-send').disabled = false;
+  scrollMessages();
+}
+
+function addMessageBubble(type, text) {
+  const msgs = document.getElementById('messages');
+  const empty = msgs.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  const div = document.createElement('div');
+  div.className = 'msg ' + type;
+  const role = type === 'user' ? 'You' : (currentAgent ? (agents[currentAgent]?.name || currentAgent) : 'Agent');
+  div.innerHTML = `<div class="msg-role">${role}</div><div class="msg-text"></div>`;
+  div.querySelector('.msg-text').textContent = text;
+  msgs.appendChild(div);
+  return div;
+}
+
+function scrollMessages() {
+  const msgs = document.getElementById('messages');
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+async function clearHistory() {
+  if (!currentAgent) return;
+  await api(`/api/agents/${currentAgent}/clear`, 'POST');
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = '<div class="msg system">Conversation cleared.</div>';
+  toast('History cleared', 'ok');
+}
+
+// ============================================================
+// Create Agent
+// ============================================================
+const MODEL_MAP = {
+  anthropic: ['claude-sonnet-4-6','claude-opus-4-6','claude-haiku-4-5-20251001'],
+  openai:    ['gpt-4o','gpt-4o-mini','gpt-4-turbo','gpt-3.5-turbo'],
+  ollama:    ['llama3','mistral','phi3','codellama','gemma'],
+};
+
+function onProviderChange() {
+  const p = document.getElementById('f-provider').value;
+  const sel = document.getElementById('f-model');
+  sel.innerHTML = MODEL_MAP[p].map(m => `<option value="${m}">${m}</option>`).join('');
+  document.getElementById('f-apikey-group').style.display = p === 'ollama' ? 'none' : 'block';
+}
+
+function toggleCap(el) { el.classList.toggle('on'); }
+function toggleTool(el) { el.classList.toggle('on'); }
+
+async function createAgent() {
+  const id = document.getElementById('f-id').value.trim();
+  if (!id) { showCreateStatus('Agent ID is required', 'err'); return; }
+
+  const caps = [...document.querySelectorAll('#caps-grid .cap-toggle.on')].map(e => e.dataset.cap);
+  const tools = [...document.querySelectorAll('.tool-toggle.on')].map(e => e.dataset.tool);
+
+  const body = {
+    agent_id: id,
+    name: document.getElementById('f-name').value.trim() || id,
+    system_prompt: document.getElementById('f-prompt').value.trim() || 'You are a helpful assistant.',
+    provider: document.getElementById('f-provider').value,
+    model: document.getElementById('f-model').value,
+    api_key: document.getElementById('f-apikey').value.trim(),
+    capabilities: caps,
+    tools: tools,
+  };
+
+  try {
+    await api('/api/agents', 'POST', body);
+    showCreateStatus(`Agent "${id}" created!`, 'ok');
+    await loadAgents();
+    toast('Agent created', 'ok');
+    // Reset form
+    document.getElementById('f-id').value = '';
+    document.getElementById('f-name').value = '';
+    document.getElementById('f-prompt').value = '';
+    document.getElementById('f-apikey').value = '';
+    document.querySelectorAll('.cap-toggle.on,.tool-toggle.on').forEach(e => e.classList.remove('on'));
+    setTimeout(() => selectAgent(id), 300);
+  } catch(e) {
+    showCreateStatus(e.message, 'err');
+  }
+}
+
+function showCreateStatus(msg, cls) {
+  const el = document.getElementById('create-status');
+  el.textContent = msg;
+  el.className = cls;
+}
+
+// ============================================================
+// Audit Log
+// ============================================================
+async function loadAudit() {
+  try {
+    const data = await api('/api/audit?n=500');
+    allAuditEntries = (data.entries || []).reverse(); // newest first
+    renderAudit(allAuditEntries);
+
+    // Update agent filter dropdown
+    const agentSel = document.getElementById('audit-agent-filter');
+    const currentVal = agentSel.value;
+    agentSel.innerHTML = '<option value="">All agents</option>';
+    const agentIds = [...new Set(allAuditEntries.map(e => e.agent_id).filter(Boolean))];
+    agentIds.forEach(id => {
+      const opt = document.createElement('option');
+      opt.value = id; opt.textContent = id;
+      agentSel.appendChild(opt);
+    });
+    agentSel.value = currentVal;
+  } catch(e) {}
+}
+
+function filterAudit(val) {
+  const filter = (val !== undefined ? val : document.getElementById('audit-filter').value).toLowerCase();
+  const agentFilter = document.getElementById('audit-agent-filter').value;
+  const filtered = allAuditEntries.filter(e => {
+    const matchEvent = !filter || (e.event || '').toLowerCase().includes(filter);
+    const matchAgent = !agentFilter || e.agent_id === agentFilter;
+    return matchEvent && matchAgent;
+  });
+  renderAudit(filtered);
+}
+
+function renderAudit(entries) {
+  const body = document.getElementById('audit-body');
+  document.getElementById('audit-count').textContent = `${entries.length} entries`;
+  if (!entries.length) {
+    body.innerHTML = '<div style="padding:20px;color:var(--muted);text-align:center">No entries</div>';
+    return;
+  }
+  body.innerHTML = '';
+  for (const e of entries) {
+    const ts = (e.ts || '').replace('T', ' ').slice(0, 19);
+    const event = e.event || '?';
+    const meta = Object.entries(e)
+      .filter(([k]) => !['ts','event','_sig'].includes(k))
+      .map(([k,v]) => `${k}=${JSON.stringify(v)}`)
+      .join('  ');
+
+    const row = document.createElement('div');
+    row.className = 'audit-row';
+    row.innerHTML = `
+      <span class="audit-ts">${ts.slice(11)}</span>
+      <span class="audit-event ${event}">${event}</span>
+      <span class="audit-meta">${meta}</span>`;
+
+    const detail = document.createElement('div');
+    detail.className = 'audit-detail';
+    detail.textContent = JSON.stringify(e, null, 2);
+
+    row.addEventListener('click', () => {
+      detail.style.display = detail.style.display === 'block' ? 'none' : 'block';
+    });
+
+    body.appendChild(row);
+    body.appendChild(detail);
+  }
+}
+
+// ============================================================
+// Orchestrator
+// ============================================================
+function refreshOrchSelects() {
+  const ids = Object.keys(agents);
+  const makeOptions = () => ids.map(id => `<option value="${id}">${agents[id].name || id}</option>`).join('');
+
+  document.querySelectorAll('.pipeline-agent,.parallel-agent').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = makeOptions();
+    if (ids.includes(cur)) sel.value = cur;
+  });
+}
+
+function addStep() {
+  const ids = Object.keys(agents);
+  const opts = ids.map(id => `<option value="${id}">${agents[id].name || id}</option>`).join('');
+  const row = document.createElement('div');
+  row.className = 'step-row';
+  row.innerHTML = `
+    <select class="agent-select pipeline-agent">${opts}</select>
+    <input class="tmpl-input" placeholder="Prompt template (use {previous}) — leave blank to pass verbatim">
+    <button class="btn-del-step" onclick="delStep(this)">✕</button>`;
+  document.getElementById('pipeline-steps').appendChild(row);
+}
+
+function delStep(btn) {
+  const rows = document.querySelectorAll('#pipeline-steps .step-row');
+  if (rows.length > 1) btn.parentElement.remove();
+}
+
+function addParallelTask() {
+  const ids = Object.keys(agents);
+  const opts = ids.map(id => `<option value="${id}">${agents[id].name || id}</option>`).join('');
+  const row = document.createElement('div');
+  row.className = 'task-row';
+  row.innerHTML = `
+    <select class="agent-select parallel-agent">${opts}</select>
+    <input class="task-input" placeholder="Input for this agent…">
+    <button class="btn-del-step" onclick="this.parentElement.remove()">✕</button>`;
+  document.getElementById('parallel-tasks').appendChild(row);
+}
+
+async function runPipeline() {
+  const steps = [...document.querySelectorAll('#pipeline-steps .step-row')].map(row => ({
+    agent_id: row.querySelector('.pipeline-agent').value,
+    template: row.querySelector('.tmpl-input').value.trim() || null,
+  }));
+  const input = document.getElementById('pipeline-input').value.trim();
+  if (!input) { toast('Enter initial input', 'err'); return; }
+
+  const resultEl = document.getElementById('orch-result');
+  resultEl.textContent = '⏳ Running pipeline…';
+
+  try {
+    const data = await api('/api/orchestrator/pipeline', 'POST', { steps, initial_input: input });
+    resultEl.textContent = data.results.map(r =>
+      `[${r.agent_id}]\n${r.content}`
+    ).join('\n\n---\n\n');
+    toast('Pipeline complete', 'ok');
+  } catch(e) {
+    resultEl.textContent = '⚠ ' + e.message;
+    toast('Pipeline failed', 'err');
+  }
+}
+
+async function runParallel() {
+  const tasks = [...document.querySelectorAll('#parallel-tasks .task-row')].map(row => ({
+    agent_id: row.querySelector('.parallel-agent').value,
+    input: row.querySelector('.task-input').value.trim(),
+  })).filter(t => t.input);
+
+  if (!tasks.length) { toast('Add at least one task with input', 'err'); return; }
+
+  const resultEl = document.getElementById('orch-result');
+  resultEl.textContent = '⏳ Running parallel tasks…';
+
+  try {
+    const data = await api('/api/orchestrator/parallel', 'POST', { tasks });
+    resultEl.textContent = data.results.map(r =>
+      `[${r.agent_id}]\n${r.content}`
+    ).join('\n\n---\n\n');
+    toast('Parallel run complete', 'ok');
+  } catch(e) {
+    resultEl.textContent = '⚠ ' + e.message;
+    toast('Parallel run failed', 'err');
+  }
+}
+
+// ============================================================
+// Utilities
+// ============================================================
+async function api(path, method = 'GET', body = null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const resp = await fetch(API + path, opts);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(err.detail || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show ' + type;
+  setTimeout(() => el.className = '', 2500);
+}
+
+// Seed orch selects on first render
+refreshOrchSelects();
+
+// ============================================================
+// Gateways
+// ============================================================
+const navMap2 = { chat: 'nav-chat', audit: 'nav-audit', orch: 'nav-orch', gw: 'nav-gw', create: null };
+// Patch activateTab to handle gw panel
+const _origActivate = activateTab;
+// Already defined above — just extend navMap
+Object.assign(navMap, { gw: 'nav-gw' });
+
+async function loadGatewayStatus() {
+  try {
+    const data = await api('/api/gateways');
+    const el = document.getElementById('gw-status-body');
+    if (!data.gateways || !data.gateways.length) {
+      el.textContent = 'No gateways registered yet.';
+      return;
+    }
+    el.innerHTML = data.gateways.map(g => {
+      const icon = g.running ? '🟢' : '🔴';
+      const label = {telegram:'Telegram',whatsapp:'WhatsApp',imessage:'iMessage'}[g.platform] || g.platform;
+      return `<div style="padding:4px 0">${icon} <strong>${label}</strong> — ${g.running ? 'running' : 'stopped'}</div>`;
+    }).join('') + `<div style="margin-top:8px;color:var(--muted)">Sessions: ${data.sessions}</div>`;
+  } catch(e) {
+    document.getElementById('gw-status-body').textContent = '⚠ Could not load gateway status.';
+  }
+}
+
+async function setupTelegram() {
+  const token = document.getElementById('tg-token').value.trim();
+  if (!token) { setGwStatus('tg-status', '❌ Bot token required', 'err'); return; }
+  const webhookUrl = document.getElementById('tg-webhook').value.trim() || null;
+  const allowed = document.getElementById('tg-allowed').value.split(',').map(s=>s.trim()).filter(Boolean);
+  setGwStatus('tg-status', '⏳ Connecting…', 'info');
+  try {
+    const r = await api('/api/gateways/telegram', 'POST', { token, webhook_url: webhookUrl, allowed_chat_ids: allowed });
+    setGwStatus('tg-status', `✅ Connected (${r.mode})`, 'ok');
+    loadGatewayStatus();
+  } catch(e) { setGwStatus('tg-status', '❌ ' + e.message, 'err'); }
+}
+
+async function setupWhatsApp() {
+  const access_token = document.getElementById('wa-token').value.trim();
+  const phone_number_id = document.getElementById('wa-phone-id').value.trim();
+  const verify_token = document.getElementById('wa-verify').value.trim();
+  if (!access_token || !phone_number_id || !verify_token) {
+    setGwStatus('wa-status', '❌ Access token, Phone ID, and verify token are required', 'err'); return;
+  }
+  const app_secret = document.getElementById('wa-secret').value.trim();
+  setGwStatus('wa-status', '⏳ Connecting…', 'info');
+  try {
+    const r = await api('/api/gateways/whatsapp', 'POST', { access_token, phone_number_id, verify_token, app_secret });
+    setGwStatus('wa-status', `✅ Connected (${r.mode})`, 'ok');
+    loadGatewayStatus();
+  } catch(e) { setGwStatus('wa-status', '❌ ' + e.message, 'err'); }
+}
+
+async function setupiMessage() {
+  const poll_interval = parseFloat(document.getElementById('im-poll').value) || 3;
+  const allowed = document.getElementById('im-allowed').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const sms_fallback = document.getElementById('im-sms-fallback').checked;
+  setGwStatus('im-status', '⏳ Connecting…', 'info');
+  try {
+    const r = await api('/api/gateways/imessage', 'POST', { poll_interval, allowed_handles: allowed, sms_fallback });
+    setGwStatus('im-status', `✅ Connected (${r.mode})`, 'ok');
+    loadGatewayStatus();
+  } catch(e) { setGwStatus('im-status', '❌ ' + e.message, 'err'); }
+}
+
+function setGwStatus(id, msg, type) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.style.color = type === 'ok' ? 'var(--accent2)' : type === 'err' ? 'var(--danger)' : 'var(--muted)';
+}
+</script>
+</body>
+</html>
