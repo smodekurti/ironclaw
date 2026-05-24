@@ -443,6 +443,7 @@ class AgentSpec(BaseModel):
             agentId=agent_id,
             persona=PersonaSpec(systemPrompt=system_prompt),
             model=ModelSpec(provider=provider, model=model, credentials=creds),
+            memory=MemorySpec(type=MemoryType.in_memory)
         )
 
     def to_dict(self) -> dict:

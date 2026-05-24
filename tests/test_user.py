@@ -2,16 +2,16 @@ import pytest
 import os
 import tempfile
 from ironclaw.user.profile import UserProfile
-from ironclaw.user.store import UserStore
+from ironclaw.user.store import UserProfileStore
 
 def test_user_store():
     with tempfile.NamedTemporaryFile(delete=False) as f:
         path = f.name
         
-    store = UserStore(path)
+    store = UserProfileStore(path)
     store.clear()
     
-    prof = UserProfile(name="John", about="Developer")
+    prof = UserProfile(name="John", role="Developer")
     store.save(prof)
     
     assert store.exists() == True
