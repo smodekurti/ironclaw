@@ -117,7 +117,7 @@ const MODELS = {
   groq: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'],
   mistral: ['mistral-large-latest', 'mistral-medium-latest'],
   together: ['meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo'],
-  ollama: ['llama3', 'mistral'],
+  ollama: [], // free-text — type your local model name
 };
 
 function ChatSandbox({ agents, onAgentCreated }) {
@@ -308,10 +308,14 @@ function ChatSandbox({ agents, onAgentCreated }) {
               </select>
             </Field>
             <Field label="Model">
-              <select value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} className={inputCls}>
-                {(MODELS[form.provider] || []).map(m => <option key={m} value={m}>{m}</option>)}
-                <option value={form.model}>{form.model}</option>
-              </select>
+              {form.provider === 'ollama' ? (
+                <input value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
+                  placeholder="e.g. llama3.3:70b, gemma4:latest, mistral" className={inputCls} />
+              ) : (
+                <select value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} className={inputCls}>
+                  {(MODELS[form.provider] || []).map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              )}
             </Field>
             <Field label="API Key">
               <input type="password" value={form.api_key} onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
