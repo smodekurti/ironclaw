@@ -23,6 +23,83 @@ from pathlib import Path
 from ironclaw.cli import fmt
 
 # ---------------------------------------------------------------------------
+# Live model fetching
+# ---------------------------------------------------------------------------
+
+def _fetch_models(provider_id: str, api_key: str) -> list[str]:
+    """Fetch the live model list from a provider API. Returns [] on any failure."""
+    import urllib.request, urllib.error, json as _json
+
+    def _get(url: str, headers: dict) -> list[str] | None:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return _json.loads(r.read())
+        except Exception:
+            return None
+
+    try:
+        if provider_id == "anthropic":
+            data = _get("https://api.anthropic.com/v1/models",
+                        {"x-api-key": api_key, "anthropic-version": "2023-06-01"})
+            if data:
+                models = [m["id"] for m in (data.get("data") or [])]
+                # Keep only text/chat models, sorted newest first
+                return sorted([m for m in models if "claude" in m], reverse=True)
+
+        elif provider_id == "openai":
+            data = _get("https://api.openai.com/v1/models",
+                        {"Authorization": f"Bearer {api_key}"})
+            if data:
+                ids = sorted([m["id"] for m in (data.get("data") or [])
+                               if any(m["id"].startswith(p) for p in ("gpt-4", "gpt-3.5", "o1", "o3", "o4"))],
+                              reverse=True)
+                return ids
+
+        elif provider_id == "gemini":
+            data = _get(f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}", {})
+            if data:
+                return [m["name"].replace("models/", "") for m in (data.get("models") or [])
+                        if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+
+        elif provider_id == "groq":
+            data = _get("https://api.groq.com/openai/v1/models",
+                        {"Authorization": f"Bearer {api_key}"})
+            if data:
+                return sorted([m["id"] for m in (data.get("data") or [])], reverse=True)
+
+        elif provider_id == "mistral":
+            data = _get("https://api.mistral.ai/v1/models",
+                        {"Authorization": f"Bearer {api_key}"})
+            if data:
+                return sorted([m["id"] for m in (data.get("data") or [])
+                                if m.get("capabilities", {}).get("completion_chat")], reverse=True)
+
+        elif provider_id == "together":
+            data = _get("https://api.together.xyz/v1/models",
+                        {"Authorization": f"Bearer {api_key}"})
+            if data:
+                models = data if isinstance(data, list) else data.get("data", [])
+                return [m["id"] for m in models
+                        if (m.get("type") or "").lower() in ("chat", "language")][:30]
+
+        elif provider_id == "xai":
+            data = _get("https://api.x.ai/v1/models",
+                        {"Authorization": f"Bearer {api_key}"})
+            if data:
+                return [m["id"] for m in (data.get("data") or [])]
+
+        elif provider_id == "perplexity":
+            # Perplexity doesn't have a public /models endpoint — return known models
+            return ["sonar-pro", "sonar", "sonar-reasoning", "sonar-reasoning-pro"]
+
+    except Exception:
+        pass
+
+    return []
+
+
+# ---------------------------------------------------------------------------
 # Provider catalogue
 # ---------------------------------------------------------------------------
 
@@ -212,18 +289,39 @@ def dispatch(args: argparse.Namespace, _client: object) -> int:
             key = _ask(f"{env_var}")
             if key:
                 env[env_var] = key
-                suggested_model = {
-                    "anthropic":  "claude-sonnet-4-6",
-                    "openai":     "gpt-4o",
-                    "gemini":     "gemini-2.5-pro",
-                    "groq":       "llama-3.3-70b-versatile",
-                    "mistral":    "mistral-large-latest",
-                    "cohere":     "command-r-plus",
-                    "together":   "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-                    "perplexity": "sonar-pro",
-                    "xai":        "grok-3",
-                }.get(pid, "")
-                model = _ask("Default model", suggested_model)
+
+                # Try to fetch live model list from the provider API
+                fetched_models = _fetch_models(pid, key)
+
+                if fetched_models:
+                    print()
+                    print(f"  {fmt.bold('Available models:')}")
+                    for i, m in enumerate(fetched_models, 1):
+                        print(f"    {i:>2}. {m}")
+                    fallback = {
+                        "anthropic":  "1", "openai": "1", "gemini": "1",
+                        "groq": "1", "mistral": "1",
+                    }.get(pid, "1")
+                    choice = _ask("Default model (number or name)", fallback).strip()
+                    if choice.isdigit() and 1 <= int(choice) <= len(fetched_models):
+                        model = fetched_models[int(choice) - 1]
+                    else:
+                        model = choice or fetched_models[0]
+                else:
+                    # Fall back to known-good suggestions
+                    suggested_model = {
+                        "anthropic":  "claude-sonnet-4-6",
+                        "openai":     "gpt-4o",
+                        "gemini":     "gemini-2.5-pro",
+                        "groq":       "llama-3.3-70b-versatile",
+                        "mistral":    "mistral-large-latest",
+                        "cohere":     "command-r-plus",
+                        "together":   "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+                        "perplexity": "sonar-pro",
+                        "xai":        "grok-3",
+                    }.get(pid, "")
+                    model = _ask("Default model", suggested_model)
+
                 if not default_provider:
                     default_provider = pid
                     default_model = model
