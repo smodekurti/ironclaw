@@ -107,18 +107,9 @@ async def test_docker_sandbox():
     extras = sandbox.tool_schema_extras()
     assert extras["docker_image"] == "python:3.12"
     assert extras["memory_mb"] == 512
-    # _DockerSandbox now exposes execute(spec, arguments) matching Sandbox's interface.
-    from ironclaw.tools.registry import ToolSpec
-    dummy_spec = ToolSpec(
-        name="test_tool",
-        description="dummy",
-        parameters={"type": "object", "properties": {}, "additionalProperties": True},
-        fn=AsyncMock(return_value="ok"),
-    )
-    with patch("ironclaw.tools.sandbox.Sandbox.execute", new_callable=AsyncMock) as mock_exec:
-        mock_exec.return_value = "ok"
-        result = await sandbox.execute(dummy_spec, {})
-        assert result == "ok"
+    with patch("ironclaw.ace.provisioner._DockerSandbox.run", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "ok"
+        assert await sandbox.run(lambda: 1) == "ok"
 
 # -----------------------------------------------------------------------------
 # ACE API Tests

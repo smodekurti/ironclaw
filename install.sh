@@ -21,11 +21,22 @@ echo -e "${BLUE}       Installing IronClaw Framework   ${NC}"
 echo -e "${BLUE}=======================================${NC}\n"
 
 # 1. Check dependencies
-echo -e "${YELLOW}[1/4] Checking dependencies...${NC}"
+echo -e "${YELLOW}[1/5] Checking dependencies...${NC}"
 
 if ! command -v git &> /dev/null; then
     echo -e "${RED}Error: Git is not installed. Please install Git and try again.${NC}"
     exit 1
+fi
+
+# Check for Node.js/npm (needed for dashboard build)
+HAS_NODE=false
+if command -v npm &> /dev/null; then
+    HAS_NODE=true
+    NODE_VERSION=$(node --version 2>/dev/null || echo "unknown")
+    echo -e "  Node.js $NODE_VERSION ✓"
+else
+    echo -e "  ${YELLOW}Warning: npm not found — dashboard will not be built.${NC}"
+    echo -e "  Install Node.js from https://nodejs.org to enable the web UI."
 fi
 
 # Find Python 3.10+ — check versioned binaries first, then fall back to python3.
@@ -59,7 +70,7 @@ PY_VERSION=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.ver
 echo -e "  Python $PY_VERSION ($PYTHON) ✓"
 
 # 2. Clone or update repository
-echo -e "\n${YELLOW}[2/4] Cloning IronClaw repository...${NC}"
+echo -e "\n${YELLOW}[2/5] Cloning IronClaw repository...${NC}"
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo "  Directory $INSTALL_DIR already exists — updating..."
     cd "$INSTALL_DIR"
@@ -71,7 +82,7 @@ else
 fi
 
 # 3. Setup Virtual Environment and Install
-echo -e "\n${YELLOW}[3/4] Setting up isolated Python environment...${NC}"
+echo -e "\n${YELLOW}[3/5] Setting up isolated Python environment...${NC}"
 echo "  Using $PYTHON to create virtualenv at $VENV_DIR"
 "$PYTHON" -m venv "$VENV_DIR"
 
@@ -79,8 +90,21 @@ echo "  Installing IronClaw and dependencies..."
 "$VENV_DIR/bin/pip" install --upgrade pip --quiet
 "$VENV_DIR/bin/pip" install -e "$INSTALL_DIR[all]" --quiet
 
-# 4. Create executable wrapper
-echo -e "\n${YELLOW}[4/4] Creating executable link...${NC}"
+# 4. Build dashboard
+echo -e "\n${YELLOW}[4/5] Building web dashboard...${NC}"
+DASHBOARD_DIR="$INSTALL_DIR/ironclaw/web/dashboard"
+if [ "$HAS_NODE" = true ] && [ -d "$DASHBOARD_DIR" ]; then
+    echo "  Running npm install..."
+    npm install --prefix "$DASHBOARD_DIR" --silent
+    echo "  Running npm run build..."
+    npm run build --prefix "$DASHBOARD_DIR" --silent
+    echo -e "  Dashboard built ✓"
+else
+    echo -e "  ${YELLOW}Skipped (npm not available)${NC}"
+fi
+
+# 5. Create executable wrapper
+echo -e "\n${YELLOW}[5/5] Creating executable link...${NC}"
 mkdir -p "$BIN_DIR"
 cat << 'EOF' > "$BIN_DIR/ironclaw"
 #!/usr/bin/env bash

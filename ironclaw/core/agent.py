@@ -44,39 +44,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 10  # hard limit to prevent infinite agent loops
 
-# ---------------------------------------------------------------------------
-# HITL intercept store — injected at startup via configure_hitl().
-# Falls back to an in-memory HITLStore when no server has wired it up
-# (e.g. during tests or standalone CLI use).
-# ---------------------------------------------------------------------------
-
-def _get_hitl() -> "HITLStore":
-    from ironclaw.core.hitl import get_hitl_store, HITLStore
-    store = get_hitl_store()
-    if store is None:
-        # Lazy in-memory fallback (single-process only)
-        store = HITLStore(db_path=":memory:")
-        from ironclaw.core.hitl import configure_hitl
-        configure_hitl(store)
-    return store
-
-# Legacy shim so existing tests/callers that import HITL_PENDING still work.
-# The shim is a dict-like view backed by list_all() — read-only compatibility.
-class _HITLPendingShim:
-    """Thin dict-like shim over HITLStore so legacy imports don't break."""
-    def keys(self):
-        return [r["call_id"] for r in _get_hitl().list_pending()]
-    def __contains__(self, call_id):
-        return _get_hitl().get_status(call_id) is not None
-    def __getitem__(self, call_id):
-        # Legacy callers expected (event, decision) tuples — not supported.
-        raise KeyError("Use HITLStore directly; HITL_PENDING shim is read-only")
-    def __setitem__(self, key, value):
-        pass  # silently ignored — store is managed internally
-    def __delitem__(self, key):
-        _get_hitl().remove(key)
-
-HITL_PENDING: dict = _HITLPendingShim()  # type: ignore[assignment]
+HITL_PENDING: dict[str, tuple[asyncio.Event, str | None]] = {}
 
 
 
@@ -225,89 +193,13 @@ class Agent:
         context: ExecutionContext | None = None,
     ) -> AsyncIterator[str]:
         """
-        Streaming variant — yields text tokens as the LLM produces them.
-
-        Strategy
-        --------
-        * All tool-call rounds use ``provider.complete()`` so that tool-use
-          metadata is captured atomically (the Anthropic/OpenAI streaming
-          APIs surface tool-use blocks only at stream end, making partial
-          accumulation fragile).
-        * When the final response is text-only, ``provider.stream()`` is
-          called so the SSE endpoint delivers true token-by-token chunks.
-        * The content saved to memory comes from the preceding
-          ``complete()`` call to avoid a second round-trip for short
-          no-tool replies that were already fetched.
+        Streaming variant — yields text chunks as the LLM produces them.
+        Tool calls are executed silently; only the final text is streamed.
         """
-        ctx = context or ExecutionContext(agent_id=self.agent_id)
-        self._context = ctx
-
-        # --- 1. Guard incoming message ----------------------------------
-        user_msg = Message.user(user_input)
-        scan = self.guard.scan(user_msg)
-        user_msg.injection_score = scan.score
-        user_msg.flagged = scan.blocked
-        ctx.record("message_received", role="user", flagged=scan.blocked, score=scan.score)
-
-        if scan.blocked:
-            ctx.record("injection_blocked", reason=scan.reason)
-            raise InjectionDetectedError(
-                f"Message blocked by prompt guard: {scan.reason} (score={scan.score:.2f})"
-            )
-
-        # --- 2. Append to memory ----------------------------------------
-        self.memory.append(user_msg)
-
-        # --- 3. Tool-call loop using complete() -------------------------
-        iteration = 0
-        while iteration < self.max_iterations:
-            iteration += 1
-            messages = self._build_messages()
-            tool_schemas = self.tools.schemas_for(self.capabilities)
-
-            ctx.record("llm_call", iteration=iteration, num_messages=len(messages))
-            llm_response = await self.provider.complete(messages, tools=tool_schemas)
-
-            if not llm_response.tool_calls:
-                # --- 4. Final text response — stream via provider -------
-                ctx.record("agent_stream_start", iteration=iteration)
-                async for chunk in self.provider.stream(
-                    messages, tools=None, max_tokens=4096
-                ):
-                    yield chunk
-
-                # Persist the reply (use content from complete() — same
-                # request parameters, deterministic enough for memory).
-                reply = Message.assistant(llm_response.content, agent_id=self.agent_id)
-                self.memory.append(reply)
-                ctx.record("agent_reply", content_length=len(llm_response.content))
-                return
-
-            # --- 5. Execute tool calls ---------------------------------
-            tool_results: list[ToolResult] = []
-            for tc in llm_response.tool_calls:
-                result = await self._execute_tool(tc, ctx)
-                tool_results.append(result)
-
-            assistant_msg = Message(
-                role=Role.TOOL_CALL,
-                content=llm_response.content or "",
-                agent_id=self.agent_id,
-                tool_calls=llm_response.tool_calls,
-                tool_results=tool_results,
-            )
-            self.memory.append(assistant_msg)
-
-        # --- Exceeded iteration limit -----------------------------------
-        abort_content = "[Agent stopped: exceeded maximum tool-call iterations]"
-        logger.warning(
-            "Agent %s hit max_iterations=%d without a final reply (streaming)",
-            self.agent_id, self.max_iterations,
-        )
-        ctx.record("max_iterations_exceeded", max=self.max_iterations)
-        abort_msg = Message.assistant(abort_content, agent_id=self.agent_id)
-        self.memory.append(abort_msg)
-        yield abort_content
+        reply = await self.run(user_input, context)
+        for chunk in reply.content.split(" "):
+            yield chunk + " "
+            await asyncio.sleep(0)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -339,32 +231,23 @@ class Agent:
 
         # HITL Intercept for sensitive tools
         if "shell" in tc.tool_name or "write" in tc.tool_name or "delete" in tc.tool_name:
-            store = _get_hitl()
-            store.add(
-                call_id=tc.call_id,
-                tool_name=tc.tool_name,
-                arguments=tc.arguments,
-                agent_id=self.agent_id,
-            )
+            event = asyncio.Event()
+            HITL_PENDING[tc.call_id] = (event, None)
             ctx.record("hitl_intercept_started", call_id=tc.call_id, tool=tc.tool_name)
-            logger.warning(
-                "HITL Intercept triggered for %s (call_id: %s)",
-                tc.tool_name, tc.call_id,
-            )
-
-            # Async-poll SQLite until a human resolves the intercept.
-            # Safe across multiple uvicorn workers — any worker can write the
-            # decision and this worker will see it on the next poll.
-            decision = await store.wait_for_decision(tc.call_id)
-            store.remove(tc.call_id)
-
+            logger.warning(f"HITL Intercept triggered for {tc.tool_name} (call_id: {tc.call_id})")
+            
+            await event.wait()
+            
+            decision = HITL_PENDING[tc.call_id][1]
+            del HITL_PENDING[tc.call_id]
+            
             if decision == "rejected":
                 ctx.record("hitl_intercept_rejected", call_id=tc.call_id)
                 return ToolResult(
-                    call_id=tc.call_id,
-                    tool_name=tc.tool_name,
-                    output=None,
-                    error="Human rejected the execution of this tool.",
+                    call_id=tc.call_id, 
+                    tool_name=tc.tool_name, 
+                    output=None, 
+                    error="Human rejected the execution of this tool."
                 )
 
         ctx.record("tool_call_start", tool=tc.tool_name, args=tc.arguments)

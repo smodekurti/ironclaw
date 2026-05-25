@@ -157,48 +157,11 @@ class SQLiteConversation(MemoryBackend):
         for (payload,) in rows:
             try:
                 data = json.loads(payload)
-                from ironclaw.core.message import ToolCall, ToolResult
-                from datetime import datetime, timezone
-
-                # Restore tool calls
-                tool_calls = [
-                    ToolCall(
-                        tool_name=tc["tool_name"],
-                        arguments=tc["arguments"],
-                        call_id=tc["call_id"],
-                    )
-                    for tc in data.get("tool_calls", [])
-                ]
-
-                # Restore tool results
-                tool_results = [
-                    ToolResult(
-                        call_id=tr["call_id"],
-                        tool_name=tr["tool_name"],
-                        output=tr.get("output"),
-                        error=tr.get("error"),
-                        duration_ms=tr.get("duration_ms", 0.0),
-                    )
-                    for tr in data.get("tool_results", [])
-                ]
-
-                # Restore timestamp (fall back to now if missing/malformed)
-                try:
-                    ts = datetime.fromisoformat(data["timestamp"])
-                except (KeyError, ValueError):
-                    ts = datetime.now(timezone.utc)
-
                 msg = Message(
                     role=Role(data["role"]),
                     content=data["content"],
                     agent_id=data.get("agent_id", ""),
                     message_id=data["message_id"],
-                    timestamp=ts,
-                    tool_calls=tool_calls,
-                    tool_results=tool_results,
-                    injection_score=data.get("injection_score", 0.0),
-                    flagged=data.get("flagged", False),
-                    metadata=data.get("metadata", {}),
                 )
                 messages.append(msg)
             except Exception:

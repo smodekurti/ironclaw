@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, AsyncIterator
+from typing import Any
 
 from ironclaw.core.message import ToolCall
 from ironclaw.providers.base import LLMProvider, LLMResponse
@@ -102,33 +102,3 @@ class OpenAIProvider(LLMProvider):
             },
             raw=resp,
         )
-
-    # ------------------------------------------------------------------
-    # stream() — real token-by-token via OpenAI SSE stream
-    # ------------------------------------------------------------------
-
-    async def stream(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-        **kwargs: Any,
-    ) -> AsyncIterator[str]:
-        call_kwargs: dict[str, Any] = dict(
-            model=self.model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            stream=True,
-            **kwargs,
-        )
-        # Don't pass tools to the streaming call — text-only final response.
-
-        stream = await self._client.chat.completions.create(**call_kwargs)
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            if delta and delta.content:
-                yield delta.content

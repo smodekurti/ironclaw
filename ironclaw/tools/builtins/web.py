@@ -26,20 +26,19 @@ _MAX_RESPONSE_BYTES = 256 * 1024  # 256 KB
 _REQUEST_TIMEOUT = 15.0
 _MAX_REDIRECTS = 3
 
-# Default blocked domains — never mutated at runtime.
-_DEFAULT_BLOCKED_DOMAINS: frozenset[str] = frozenset({
+_BLOCKED_DOMAINS: set[str] = {
     "169.254.169.254",  # AWS metadata endpoint
     "metadata.google.internal",
     "metadata.azure.com",
-})
+}
 
 
-def _check_url(url: str, blocked: frozenset[str] = _DEFAULT_BLOCKED_DOMAINS) -> str:
+def _check_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"Only http/https URLs are allowed, got: {parsed.scheme}://")
     host = parsed.hostname or ""
-    if host in blocked:
+    if host in _BLOCKED_DOMAINS:
         raise PermissionError(f"Domain '{host}' is blocked")
     # Block private / loopback ranges via simple hostname check
     if re.match(r"^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)", host):
@@ -47,26 +46,22 @@ def _check_url(url: str, blocked: frozenset[str] = _DEFAULT_BLOCKED_DOMAINS) -> 
     return url
 
 
-def _make_web_fetch(blocked: frozenset[str]):
-    """Return a web_fetch function closed over the given blocked-domain set."""
-    async def _web_fetch(url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        """Fetch a URL and return status, headers, and text body."""
-        _check_url(url, blocked)
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            max_redirects=_MAX_REDIRECTS,
-            timeout=_REQUEST_TIMEOUT,
-        ) as client:
-            resp = await client.get(url, headers=headers or {})
-            # _MAX_RESPONSE_BYTES is in bytes; divide by 4 for conservative char estimate
-            body = resp.text[: _MAX_RESPONSE_BYTES // 4]
-            return {
-                "status_code": resp.status_code,
-                "url": str(resp.url),
-                "content_type": resp.headers.get("content-type", ""),
-                "body": body,
-            }
-    return _web_fetch
+async def _web_fetch(url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    """Fetch a URL and return status, headers, and text body."""
+    _check_url(url)
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        max_redirects=_MAX_REDIRECTS,
+        timeout=_REQUEST_TIMEOUT,
+    ) as client:
+        resp = await client.get(url, headers=headers or {})
+        body = resp.text[: _MAX_RESPONSE_BYTES // 4]  # ~64K chars
+        return {
+            "status_code": resp.status_code,
+            "url": str(resp.url),
+            "content_type": resp.headers.get("content-type", ""),
+            "body": body,
+        }
 
 
 async def _web_search(query: str, max_results: int = 5) -> list[dict[str, str]]:
@@ -115,14 +110,9 @@ def register_web_tools(
     registry: ToolRegistry,
     blocked_domains: list[str] | None = None,
 ) -> None:
-    """Register web tools into *registry*.
-
-    Each call produces independent tool functions closed over their own
-    blocked-domain set, so different agents can have different domain
-    policies without polluting each other.
-    """
-    # Build a per-registration frozenset so we never mutate a shared global.
-    blocked: frozenset[str] = _DEFAULT_BLOCKED_DOMAINS | frozenset(blocked_domains or [])
+    """Register web tools into *registry*."""
+    if blocked_domains:
+        _BLOCKED_DOMAINS.update(blocked_domains)
 
     registry.register(
         ToolSpec(
@@ -140,7 +130,7 @@ def register_web_tools(
                 },
                 "required": ["url"],
             },
-            fn=_make_web_fetch(blocked),
+            fn=_web_fetch,
             requires="web:fetch",
         )
     )
