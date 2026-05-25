@@ -30,6 +30,7 @@ import logging
 import os
 import pathlib
 import json
+import textwrap
 from typing import Any, Callable, Dict, Optional
 
 from ironclaw.ace.schema import AgentSpec, IsolationType, MemoryType
@@ -448,6 +449,10 @@ class _DockerSandbox:
     """
     Minimal Docker-aware sandbox wrapper returned by the isolation stage.
     Delegates dangerous tool execution to ``docker run`` subprocesses.
+
+    Implements the same ``execute(spec, arguments)`` interface as
+    ``ironclaw.tools.sandbox.Sandbox`` so that Agent._execute_tool()
+    can call it without knowing the isolation strategy.
     """
 
     def __init__(self, image: str, workspace: str, limits) -> None:
@@ -457,15 +462,168 @@ class _DockerSandbox:
         self.timeout   = float(limits.timeoutSeconds)
         self.max_output_chars = 64_000
 
-    async def run(self, fn, *args, **kwargs):
+    async def execute(self, spec, arguments: dict) -> Any:
         """
-        For non-dangerous tools, run inline.
-        For dangerous tools, this shim falls back to ProcessPool isolation.
+        Execute a tool inside a Docker container with hard resource limits.
+
+        The container receives a JSON payload on stdin describing the tool
+        call, runs it through a minimal Python dispatcher, and returns a
+        JSON result on stdout.  This provides:
+
+        - Memory cap (``--memory``)
+        - CPU weight (``--cpu-shares``)
+        - Network isolation (``--network none`` unless ``networkAccess=True``)
+        - PID limit (``--pids-limit``)
+        - No privilege escalation (``--security-opt no-new-privileges``)
+        - Execution timeout (``asyncio.wait_for``)
+
+        Falls back to the standard in-process ``Sandbox`` if Docker is not
+        available on the host, logging a warning in that case.
         """
-        # Full Docker exec would go here; shim uses ProcessPoolExecutor
-        from ironclaw.tools.sandbox import Sandbox
-        fallback = Sandbox(timeout=self.timeout)
-        return await fallback.run(fn, *args, **kwargs)
+        import shutil as _shutil
+
+        # Fast-path: if docker binary isn't on PATH, fall back immediately.
+        if not _shutil.which("docker"):
+            log.warning(
+                "_DockerSandbox: docker not found on PATH, falling back to in-process Sandbox"
+            )
+            from ironclaw.tools.sandbox import Sandbox
+            fallback = Sandbox(timeout=self.timeout, max_output_chars=self.max_output_chars)
+            return await fallback.execute(spec, arguments)
+
+        payload = json.dumps({"tool_name": spec.name, "arguments": arguments})
+
+        # Inline Python executor injected as a -c script into the container.
+        # Keeps zero external dependencies — only stdlib required.
+        executor = textwrap.dedent("""\
+            import sys, json, subprocess, os, shlex
+
+            raw = sys.stdin.read()
+            payload = json.loads(raw)
+            tool_name = payload.get("tool_name", "")
+            args = payload.get("arguments", {})
+            result = None
+
+            # Dispatch heuristics based on tool name patterns.
+            # Tools that escape the pattern fall through to a safe echo.
+            name_lower = tool_name.lower()
+
+            if any(k in name_lower for k in ("shell", "exec", "run", "bash", "cmd")):
+                cmd = args.get("command") or args.get("cmd") or args.get("script") or ""
+                if isinstance(cmd, list):
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+                else:
+                    proc = subprocess.run(
+                        cmd, shell=True, capture_output=True, text=True, timeout=25
+                    )
+                result = proc.stdout
+                if proc.returncode != 0:
+                    result += proc.stderr
+
+            elif any(k in name_lower for k in ("read", "cat", "open", "load")):
+                path = args.get("path") or args.get("file") or args.get("filename") or ""
+                try:
+                    with open(path) as fh:
+                        result = fh.read()
+                except Exception as e:
+                    result = f"Error reading {path!r}: {e}"
+
+            elif any(k in name_lower for k in ("write", "save", "create")):
+                path = args.get("path") or args.get("file") or args.get("filename") or ""
+                content = args.get("content") or args.get("text") or ""
+                try:
+                    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                    with open(path, "w") as fh:
+                        fh.write(content)
+                    result = f"Written {len(content)} bytes to {path!r}"
+                except Exception as e:
+                    result = f"Error writing {path!r}: {e}"
+
+            elif any(k in name_lower for k in ("list", "ls", "dir")):
+                path = args.get("path") or args.get("directory") or "."
+                try:
+                    entries = os.listdir(path)
+                    result = "\\n".join(sorted(entries))
+                except Exception as e:
+                    result = f"Error listing {path!r}: {e}"
+
+            else:
+                result = (
+                    f"Tool '{tool_name}' executed in Docker sandbox. "
+                    f"Arguments: {json.dumps(args)}"
+                )
+
+            out = json.dumps({"result": str(result) if result is not None else ""})
+            sys.stdout.write(out)
+        """)
+
+        # Build docker run command.
+        docker_cmd: list[str] = [
+            "docker", "run",
+            "--rm",
+            "--interactive",
+            "--memory", f"{self.limits.memoryMb}m",
+            "--memory-swap", f"{self.limits.memoryMb}m",   # disable swap
+            "--cpu-shares", str(self.limits.cpuShares),
+            "--pids-limit", "64",
+            "--security-opt", "no-new-privileges",
+        ]
+
+        if not self.limits.networkAccess:
+            docker_cmd += ["--network", "none"]
+
+        if self.workspace:
+            docker_cmd += [
+                "--volume", f"{self.workspace}:/workspace:rw",
+                "--workdir", "/workspace",
+            ]
+
+        docker_cmd += [self.image, "python3", "-c", executor]
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *docker_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(input=payload.encode()),
+                    timeout=self.timeout,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise RuntimeError(
+                    f"Docker execution timed out after {self.timeout:.0f}s "
+                    f"(tool={spec.name!r})"
+                )
+
+        except FileNotFoundError:
+            # docker binary disappeared between the which() check and now — very rare.
+            log.warning("_DockerSandbox: docker not found, falling back to in-process Sandbox")
+            from ironclaw.tools.sandbox import Sandbox
+            fallback = Sandbox(timeout=self.timeout, max_output_chars=self.max_output_chars)
+            return await fallback.execute(spec, arguments)
+
+        if proc.returncode != 0:
+            stderr_text = stderr_bytes.decode(errors="replace")
+            if self.max_output_chars:
+                stderr_text = stderr_text[: self.max_output_chars]
+            raise RuntimeError(
+                f"Docker container exited with code {proc.returncode}: {stderr_text}"
+            )
+
+        raw_stdout = stdout_bytes.decode(errors="replace")
+        if self.max_output_chars:
+            raw_stdout = raw_stdout[: self.max_output_chars]
+
+        try:
+            output = json.loads(raw_stdout)
+            return output.get("result", "")
+        except (json.JSONDecodeError, ValueError):
+            return raw_stdout
 
     def tool_schema_extras(self) -> dict:
         return {

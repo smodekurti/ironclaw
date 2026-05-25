@@ -181,7 +181,7 @@ class ToolConfig(BaseModel):
 
 class MemorySpec(BaseModel):
     """Conversation memory backend."""
-    type: MemoryType = Field(default=MemoryType.sqlite)
+    type: MemoryType = Field(default=MemoryType.in_memory)
     dbPath: Optional[str] = Field(
         default=None,
         description="Required when type='sqlite'. Absolute path to the SQLite database file.",

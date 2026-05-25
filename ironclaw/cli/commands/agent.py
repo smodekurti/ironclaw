@@ -265,13 +265,13 @@ def _create(args: argparse.Namespace, client: IronClawClient, as_json: bool) -> 
             if warnings:
                 print()
                 for w in warnings:
-                    fmt.warning(f"  ⚠  {w}")
+                    fmt.warn(f"  ⚠  {w}")
         else:
             fmt.success(f"Agent '{result.get('agentId')}' created via ACE")
             warnings = result.get("warnings", [])
             if warnings:
                 for w in warnings:
-                    fmt.warning(f"  ⚠  {w}")
+                    fmt.warn(f"  ⚠  {w}")
         return 0
 
     # ----------------------------------------------------------------

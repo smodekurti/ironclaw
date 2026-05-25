@@ -129,7 +129,7 @@ class Sandbox:
         module_path = spec.fn.__module__
         fn_name = spec.fn.__name__
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             future = loop.run_in_executor(
                 self._executor,
