@@ -231,26 +231,52 @@ def dispatch(args: argparse.Namespace, _client: object) -> int:
             host = _ask("Ollama host", "http://localhost:11434")
             env["OLLAMA_HOST"] = host
 
-            # Fetch installed models — try `ollama list` first (most reliable),
-            # then fall back to the HTTP API.
-            import shutil, subprocess, urllib.request as _ureq, json as _json
+            # Fetch installed models — try several methods in order.
+            import shutil, subprocess, json as _json, os as _os
             ollama_models: list[str] = []
 
-            # Method 1: `ollama list` CLI (bypasses all HTTP/IPv6 issues)
-            if shutil.which("ollama"):
+            # Method 1: `ollama list` CLI — try PATH + common macOS install locations
+            _ollama_bin = (
+                shutil.which("ollama")
+                or shutil.which("ollama", path="/usr/local/bin:/opt/homebrew/bin:/opt/local/bin"
+                                + ":" + _os.path.expanduser("~/.local/bin"))
+                or next((p for p in [
+                    "/usr/local/bin/ollama",
+                    "/opt/homebrew/bin/ollama",
+                    _os.path.expanduser("~/.local/bin/ollama"),
+                ] if _os.path.isfile(p)), None)
+            )
+            if _ollama_bin:
                 try:
                     out = subprocess.run(
-                        ["ollama", "list"], capture_output=True, text=True, timeout=5
+                        [_ollama_bin, "list"], capture_output=True, text=True, timeout=5
                     )
-                    for line in out.stdout.strip().splitlines()[1:]:  # skip header
+                    for line in out.stdout.strip().splitlines()[1:]:
                         parts = line.split()
                         if parts:
                             ollama_models.append(parts[0])
                 except Exception:
                     pass
 
-            # Method 2: HTTP API fallback (try 127.0.0.1 to avoid IPv6 issues)
+            # Method 2: curl (most reliable on macOS, avoids Python IPv6 issues)
+            if not ollama_models and shutil.which("curl"):
+                for _url in [host, host.replace("localhost", "127.0.0.1")]:
+                    try:
+                        out = subprocess.run(
+                            ["curl", "-s", "--connect-timeout", "3", f"{_url}/api/tags"],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if out.returncode == 0 and out.stdout:
+                            data = _json.loads(out.stdout)
+                            ollama_models = [m["name"] for m in (data.get("models") or [])]
+                            if ollama_models:
+                                break
+                    except Exception:
+                        continue
+
+            # Method 3: Python urllib fallback
             if not ollama_models:
+                import urllib.request as _ureq
                 for _url in [host, host.replace("localhost", "127.0.0.1")]:
                     try:
                         with _ureq.urlopen(f"{_url}/api/tags", timeout=5) as resp:
