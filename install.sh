@@ -32,13 +32,23 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# Require Python 3.10+ (uses union types, match/case, asyncio.get_running_loop)
+PY_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PY_MAJOR=$(python3 -c "import sys; print(sys.version_info.major)")
+PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
+    echo -e "${RED}Error: Python 3.10+ is required (found $PY_VERSION). Please upgrade and try again.${NC}"
+    exit 1
+fi
+echo -e "  Python $PY_VERSION ✓"
+
 # 2. Clone or update repository
 echo -e "\n${YELLOW}[2/4] Cloning IronClaw repository...${NC}"
-if [ -d "$INSTALL_DIR" ]; then
+if [ -d "$INSTALL_DIR/.git" ]; then
     echo "Directory $INSTALL_DIR already exists. Updating..."
     cd "$INSTALL_DIR"
     git fetch origin main
-    git reset --hard origin/main
+    git pull --ff-only origin main
 else
     git clone "$REPO_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
