@@ -128,6 +128,8 @@ function ChatSandbox({ agents, onAgentCreated }) {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [ollamaModels, setOllamaModels] = useState([]);
+  const [ollamaLoading, setOllamaLoading] = useState(false);
   const [form, setForm] = useState({
     agent_id: '', name: '', system_prompt: 'You are a helpful assistant.',
     provider: 'anthropic', model: 'claude-sonnet-4-6', api_key: '',
@@ -135,6 +137,20 @@ function ChatSandbox({ agents, onAgentCreated }) {
   });
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+
+  const fetchOllamaModels = async () => {
+    setOllamaLoading(true);
+    try {
+      const res = await fetch('http://localhost:11434/api/tags');
+      const data = await res.json();
+      const names = (data.models || []).map(m => m.name);
+      setOllamaModels(names);
+      if (names.length > 0) setForm(f => ({ ...f, model: names[0] }));
+    } catch {
+      setOllamaModels([]);
+    }
+    setOllamaLoading(false);
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -303,14 +319,30 @@ function ChatSandbox({ agents, onAgentCreated }) {
                 placeholder="My Agent" className={inputCls} />
             </Field>
             <Field label="Provider">
-              <select value={form.provider} onChange={e => setForm(f => ({ ...f, provider: e.target.value, model: MODELS[e.target.value]?.[0] || '' }))} className={inputCls}>
+              <select value={form.provider} onChange={e => {
+                const p = e.target.value;
+                const defaultModel = MODELS[p]?.[0] || '';
+                setForm(f => ({ ...f, provider: p, model: defaultModel }));
+                if (p === 'ollama') fetchOllamaModels();
+              }} className={inputCls}>
                 {PROVIDERS.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </Field>
-            <Field label="Model">
+            <Field label={form.provider === 'ollama' ? `Model ${ollamaLoading ? '(loading…)' : ollamaModels.length ? `(${ollamaModels.length} found)` : '(type manually)'}` : 'Model'}>
               {form.provider === 'ollama' ? (
-                <input value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
-                  placeholder="e.g. llama3.3:70b, gemma4:latest, mistral" className={inputCls} />
+                ollamaModels.length > 0 ? (
+                  <select value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} className={inputCls}>
+                    {ollamaModels.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                ) : (
+                  <div className="space-y-1">
+                    <input value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
+                      placeholder="e.g. llama3.3:70b, gemma4:latest" className={inputCls} />
+                    <button type="button" onClick={fetchOllamaModels} className="text-xs text-accent hover:underline">
+                      ↻ Refresh from Ollama
+                    </button>
+                  </div>
+                )
               ) : (
                 <select value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} className={inputCls}>
                   {(MODELS[form.provider] || []).map(m => <option key={m} value={m}>{m}</option>)}
