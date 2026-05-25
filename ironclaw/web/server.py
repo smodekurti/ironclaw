@@ -218,8 +218,10 @@ class HITLResolveRequest(BaseModel):
 
 @app.get("/", include_in_schema=False)
 async def serve_ui():
-    if _UI_PATH.exists():
-        return FileResponse(Path(__file__).parent / "dashboard/dist/index.html")
+    ui_file = Path(__file__).parent / "dashboard/dist/index.html"
+    if ui_file.exists():
+        return FileResponse(ui_file)
+    from fastapi.responses import HTMLResponse
     return HTMLResponse("UI not built. Run 'npm run build' in ironclaw/web/dashboard.")
 
 _ASSETS_PATH = Path(__file__).parent / "dashboard/dist/assets"
