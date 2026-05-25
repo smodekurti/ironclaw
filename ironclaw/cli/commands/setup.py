@@ -152,8 +152,33 @@ def dispatch(args: argparse.Namespace, _client: object) -> int:
 
         if pid == "ollama":
             host = _ask("Ollama host", "http://localhost:11434")
-            model = _ask("Default model", "llama3")
             env["OLLAMA_HOST"] = host
+
+            # Try to fetch locally installed models from the Ollama API
+            ollama_models: list[str] = []
+            try:
+                import urllib.request, json as _json
+                with urllib.request.urlopen(f"{host}/api/tags", timeout=3) as resp:
+                    data = _json.loads(resp.read())
+                    ollama_models = [m["name"] for m in (data.get("models") or [])]
+            except Exception:
+                pass
+
+            if ollama_models:
+                print()
+                print(f"  {fmt.bold('Available models on this Ollama instance:')}")
+                for i, m in enumerate(ollama_models, 1):
+                    print(f"    {i}. {m}")
+                default_idx = "1"
+                choice = _ask(f"Default model (number or name)", default_idx).strip()
+                if choice.isdigit() and 1 <= int(choice) <= len(ollama_models):
+                    model = ollama_models[int(choice) - 1]
+                else:
+                    model = choice or ollama_models[0]
+            else:
+                fmt.warn(f"Could not reach Ollama at {host} — enter model name manually")
+                model = _ask("Default model", "llama3.3:70b")
+
             if not default_provider:
                 default_provider = "ollama"
                 default_model = model
