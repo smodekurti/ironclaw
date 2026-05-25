@@ -231,15 +231,24 @@ def dispatch(args: argparse.Namespace, _client: object) -> int:
             host = _ask("Ollama host", "http://localhost:11434")
             env["OLLAMA_HOST"] = host
 
-            # Try to fetch locally installed models from the Ollama API
+            # Try to fetch locally installed models from the Ollama API.
+            # macOS Python resolves 'localhost' → ::1 (IPv6) but Ollama binds
+            # on 127.0.0.1 (IPv4), so we try the 127.0.0.1 form as a fallback.
             ollama_models: list[str] = []
-            try:
-                import urllib.request, json as _json
-                with urllib.request.urlopen(f"{host}/api/tags", timeout=3) as resp:
-                    data = _json.loads(resp.read())
-                    ollama_models = [m["name"] for m in (data.get("models") or [])]
-            except Exception:
-                pass
+            _urls_to_try = [host]
+            if "localhost" in host:
+                _urls_to_try.append(host.replace("localhost", "127.0.0.1"))
+            import urllib.request as _ureq, json as _json
+            _last_err: Exception = Exception("no URLs tried")
+            for _url in _urls_to_try:
+                try:
+                    with _ureq.urlopen(f"{_url}/api/tags", timeout=5) as resp:
+                        data = _json.loads(resp.read())
+                        ollama_models = [m["name"] for m in (data.get("models") or [])]
+                        break  # success — stop trying
+                except Exception as _e:
+                    _last_err = _e
+                    continue
 
             if ollama_models:
                 print()
@@ -254,6 +263,7 @@ def dispatch(args: argparse.Namespace, _client: object) -> int:
                     model = choice or ollama_models[0]
             else:
                 fmt.warn(f"Could not reach Ollama at {host} — enter model name manually")
+                fmt.warn(f"  (reason: {_last_err})")
                 model = _ask("Default model", "llama3.3:70b")
 
             if not default_provider:
