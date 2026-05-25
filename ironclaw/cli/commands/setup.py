@@ -231,39 +231,48 @@ def dispatch(args: argparse.Namespace, _client: object) -> int:
             host = _ask("Ollama host", "http://localhost:11434")
             env["OLLAMA_HOST"] = host
 
-            # Try to fetch locally installed models from the Ollama API.
-            # macOS Python resolves 'localhost' → ::1 (IPv6) but Ollama binds
-            # on 127.0.0.1 (IPv4), so we try the 127.0.0.1 form as a fallback.
+            # Fetch installed models — try `ollama list` first (most reliable),
+            # then fall back to the HTTP API.
+            import shutil, subprocess, urllib.request as _ureq, json as _json
             ollama_models: list[str] = []
-            _urls_to_try = [host]
-            if "localhost" in host:
-                _urls_to_try.append(host.replace("localhost", "127.0.0.1"))
-            import urllib.request as _ureq, json as _json
-            _last_err: Exception = Exception("no URLs tried")
-            for _url in _urls_to_try:
+
+            # Method 1: `ollama list` CLI (bypasses all HTTP/IPv6 issues)
+            if shutil.which("ollama"):
                 try:
-                    with _ureq.urlopen(f"{_url}/api/tags", timeout=5) as resp:
-                        data = _json.loads(resp.read())
-                        ollama_models = [m["name"] for m in (data.get("models") or [])]
-                        break  # success — stop trying
-                except Exception as _e:
-                    _last_err = _e
-                    continue
+                    out = subprocess.run(
+                        ["ollama", "list"], capture_output=True, text=True, timeout=5
+                    )
+                    for line in out.stdout.strip().splitlines()[1:]:  # skip header
+                        parts = line.split()
+                        if parts:
+                            ollama_models.append(parts[0])
+                except Exception:
+                    pass
+
+            # Method 2: HTTP API fallback (try 127.0.0.1 to avoid IPv6 issues)
+            if not ollama_models:
+                for _url in [host, host.replace("localhost", "127.0.0.1")]:
+                    try:
+                        with _ureq.urlopen(f"{_url}/api/tags", timeout=5) as resp:
+                            data = _json.loads(resp.read())
+                            ollama_models = [m["name"] for m in (data.get("models") or [])]
+                            if ollama_models:
+                                break
+                    except Exception:
+                        continue
 
             if ollama_models:
                 print()
                 print(f"  {fmt.bold('Available models on this Ollama instance:')}")
                 for i, m in enumerate(ollama_models, 1):
                     print(f"    {i}. {m}")
-                default_idx = "1"
-                choice = _ask(f"Default model (number or name)", default_idx).strip()
+                choice = _ask("Default model (number or name)", "1").strip()
                 if choice.isdigit() and 1 <= int(choice) <= len(ollama_models):
                     model = ollama_models[int(choice) - 1]
                 else:
                     model = choice or ollama_models[0]
             else:
-                fmt.warn(f"Could not reach Ollama at {host} — enter model name manually")
-                fmt.warn(f"  (reason: {_last_err})")
+                fmt.warn("Could not detect Ollama models — enter model name manually")
                 model = _ask("Default model", "llama3.3:70b")
 
             if not default_provider:
