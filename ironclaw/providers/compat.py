@@ -22,7 +22,7 @@ sensible defaults per service name.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, AsyncIterator
 
 from ironclaw.core.message import Message, Role, ToolCall
 from ironclaw.exceptions import ProviderError
@@ -177,6 +177,53 @@ class CompatProvider(LLMProvider):
                 ))
 
         return LLMResponse(content=content, tool_calls=tool_calls)
+
+    # ------------------------------------------------------------------
+    # stream() — real token-by-token via OpenAI-compatible SSE stream
+    # ------------------------------------------------------------------
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        try:
+            from openai import AsyncOpenAI
+        except ImportError as e:
+            raise ProviderError(
+                "openai package not installed. Run: pip install openai"
+            ) from e
+
+        client = AsyncOpenAI(
+            api_key=self.api_key or "dummy",
+            base_url=self.base_url,
+            default_headers=self.extra_headers,
+        )
+
+        wire_messages = _build_wire_messages(messages)
+
+        call_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": wire_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        try:
+            stream = await client.chat.completions.create(**call_kwargs)
+        except Exception as e:
+            raise ProviderError(f"{self.service} streaming API error: {e}") from e
+
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content
 
     @property
     def provider_name(self) -> str:

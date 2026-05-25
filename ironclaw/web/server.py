@@ -40,6 +40,7 @@ import asyncio
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 from ironclaw.builder import AgentBuilder
+from ironclaw.core.hitl import HITLStore, configure_hitl
 from ironclaw.core.orchestrator import Orchestrator
 from ironclaw.exceptions import (
     AgentNotFoundError,
@@ -78,10 +80,59 @@ from ironclaw.core.scheduler import CronScheduler
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# App & singletons
+# Lazy singletons — created inside lifespan, not at import time.
+# This prevents SQLite / file-system side-effects when the module is merely
+# imported by tests or other tooling.
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="IronClaw Control Panel", version="0.2.0")
+_audit: AuditLog = None          # type: ignore[assignment]
+_shared: SharedStateStore = None  # type: ignore[assignment]
+_policy: SecurityPolicy = None    # type: ignore[assignment]
+_orch: Orchestrator = None        # type: ignore[assignment]
+_scheduler: CronScheduler = None  # type: ignore[assignment]
+_hitl: HITLStore = None           # type: ignore[assignment]
+
+
+def _init_singletons() -> None:
+    """Initialise all server-wide singletons.  Called once inside lifespan."""
+    global _audit, _shared, _policy, _orch, _scheduler, _hitl
+
+    audit_path = os.environ.get("IRONCLAW_AUDIT_LOG", "logs/web_audit.jsonl")
+    shared_db  = os.environ.get("IRONCLAW_SHARED_STATE_DB", "logs/shared_state.db")
+    hitl_db    = os.environ.get("IRONCLAW_HITL_DB", "logs/hitl.db")
+
+    os.makedirs("logs", exist_ok=True)
+
+    _audit     = AuditLog(path=audit_path)
+    _shared    = SharedStateStore(db_path=shared_db)
+    _policy    = SecurityPolicy()
+    _orch      = Orchestrator(policy=_policy, audit_log=_audit, shared_state=_shared)
+    _scheduler = CronScheduler(_orch)
+
+    # SQLite-backed HITL store — shared across all uvicorn workers via the DB.
+    _hitl = HITLStore(db_path=hitl_db)
+    configure_hitl(_hitl)   # wire into agent.py's _get_hitl()
+
+
+# ---------------------------------------------------------------------------
+# Lifespan — replaces deprecated @app.on_event("startup"/"shutdown")
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup and shutdown logic wired via the modern lifespan protocol."""
+    _init_singletons()
+    _scheduler.start()
+    await _init_ace()
+    yield
+    _scheduler.stop()
+
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
+app = FastAPI(title="IronClaw Control Panel", version="0.2.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -91,26 +142,11 @@ app.add_middleware(
 )
 app.add_middleware(APIKeyMiddleware)
 
-_AUDIT_PATH = os.environ.get("IRONCLAW_AUDIT_LOG", "logs/web_audit.jsonl")
-_audit = AuditLog(path=_AUDIT_PATH)
-_shared = SharedStateStore(db_path=os.environ.get("IRONCLAW_SHARED_STATE_DB", "logs/shared_state.db"))
-_policy = SecurityPolicy()
-_orch = Orchestrator(policy=_policy, audit_log=_audit, shared_state=_shared)
-_scheduler = CronScheduler(_orch)
 
 # ---------------------------------------------------------------------------
 # ACE subsystem — initialised on startup
 # ---------------------------------------------------------------------------
 
-@app.on_event("startup")
-async def _start_scheduler():
-    _scheduler.start()
-
-@app.on_event("shutdown")
-async def _stop_scheduler():
-    _scheduler.stop()
-
-@app.on_event("startup")
 async def _init_ace() -> None:
     """Wire up the Agent Creation Engine on server startup."""
     try:
@@ -252,15 +288,17 @@ async def create_agent(req: CreateAgentRequest):
             .with_guard()
         )
 
-        # Provider
-        if req.provider == "anthropic":
-            builder.with_anthropic(model=req.model, api_key=req.api_key or None)
-        elif req.provider == "openai":
-            builder.with_openai(model=req.model, api_key=req.api_key or None)
-        elif req.provider == "ollama":
-            builder.with_ollama(model=req.model)
-        else:
-            raise HTTPException(400, f"Unknown provider: {req.provider}")
+        # Provider — use the factory so all 15+ providers work, not just 3.
+        try:
+            from ironclaw.providers.factory import make_provider
+            provider = make_provider(
+                req.provider,
+                model=req.model or None,
+                api_key=req.api_key or None,
+            )
+            builder.with_provider(provider)
+        except (ValueError, ImportError) as exc:
+            raise HTTPException(400, str(exc))
 
         # Tools
         if "web" in req.tools:
@@ -324,23 +362,25 @@ async def clear_history(agent_id: str):
 @app.post("/api/agents/{agent_id}/chat")
 async def chat(agent_id: str, req: ChatRequest):
     try:
-        _orch.get_agent(agent_id)  # validate existence
+        agent = _orch.get_agent(agent_id)
     except AgentNotFoundError:
         raise HTTPException(404, f"Agent '{agent_id}' not found")
 
     async def event_stream():
         try:
-            reply = await _orch.run(agent_id, req.message, session_id=req.session_id or None)
-
-            # Stream word by word for a live feel
-            words = reply.content.split(" ")
-            for i, word in enumerate(words):
-                chunk = word + (" " if i < len(words) - 1 else "")
+            collected: list[str] = []
+            # Real token-by-token streaming via provider.stream() for the
+            # final text response; tool-call rounds run complete() internally.
+            async for chunk in agent.stream(req.message):
+                collected.append(chunk)
                 payload = json.dumps({"type": "token", "text": chunk})
                 yield f"data: {payload}\n\n"
-                await asyncio.sleep(0.015)  # ~66 tokens/s pacing
 
-            done_payload = json.dumps({"type": "done", "message": reply.to_dict()})
+            full_content = "".join(collected)
+            done_payload = json.dumps({
+                "type": "done",
+                "message": {"role": "assistant", "content": full_content},
+            })
             yield f"data: {done_payload}\n\n"
 
         except InjectionDetectedError as e:
@@ -370,16 +410,16 @@ async def chat(agent_id: str, req: ChatRequest):
 
 @app.get("/api/audit")
 async def get_audit(limit: int = 100, agent_id: str | None = None):
-    filters = {}
     if agent_id:
-        filters["agent_id"] = agent_id
-    results = _audit.search(filters)
+        results = _audit.search(agent_id=agent_id)
+    else:
+        results = _audit.search()
     # Return last N
     return {"events": results[-limit:]}
 
 @app.get("/api/audit/sessions/{session_id}")
 async def get_audit_session(session_id: str):
-    events = _audit.search({"session_id": session_id})
+    events = _audit.search(session_id=session_id)
     return {"events": events, "count": len(events)}
 
 # ---------------------------------------------------------------------------
@@ -400,28 +440,123 @@ async def list_skills():
 
 @app.post("/api/skills/install")
 async def install_skill(req: SkillInstallRequest):
-    # Placeholder for actual clone logic
-    skill_name = req.url.split("/")[-1]
-    return {"status": "installed", "name": skill_name}
+    """
+    Clone a skill repository and register it.
+
+    Steps
+    -----
+    1. ``git clone --depth=1 <url>`` into ``~/.ironclaw/skills/<repo-name>/``
+    2. Validate that ``SKILL.md`` exists and parses correctly.
+    3. Register the skill in the global SkillRegistry.
+    4. Return skill metadata on success; clean up the clone on any failure.
+    """
+    import shutil
+
+    url = req.url.rstrip("/")
+    if not url:
+        raise HTTPException(400, "url must not be empty")
+
+    # Derive the target directory name from the repo slug.
+    repo_slug = url.split("/")[-1]
+    if repo_slug.endswith(".git"):
+        repo_slug = repo_slug[:-4]
+    if not repo_slug:
+        raise HTTPException(400, f"Could not determine repo name from URL: {url!r}")
+
+    skill_base = Path.home() / ".ironclaw" / "skills"
+    skill_base.mkdir(parents=True, exist_ok=True)
+    target = skill_base / repo_slug
+
+    if target.exists():
+        raise HTTPException(
+            400,
+            f"Skill directory '{repo_slug}' already exists at {target}. "
+            "Remove it first or use a different URL.",
+        )
+
+    # --- Clone ----------------------------------------------------------
+    proc = await asyncio.create_subprocess_exec(
+        "git", "clone", "--depth=1", "--", url, str(target),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr_bytes = await proc.communicate()
+
+    if proc.returncode != 0:
+        stderr_text = stderr_bytes.decode(errors="replace")[:500]
+        raise HTTPException(400, f"git clone failed: {stderr_text}")
+
+    # --- Validate SKILL.md ---------------------------------------------
+    skill_md = target / "SKILL.md"
+    if not skill_md.exists():
+        shutil.rmtree(target, ignore_errors=True)
+        raise HTTPException(
+            400,
+            "Repository cloned successfully but SKILL.md was not found in the root. "
+            "This does not appear to be a valid IronClaw skill package.",
+        )
+
+    try:
+        from ironclaw.skills.manifest import SkillManifest
+        manifest = SkillManifest.from_file(skill_md)
+    except Exception as exc:
+        shutil.rmtree(target, ignore_errors=True)
+        raise HTTPException(400, f"Invalid SKILL.md: {exc}")
+
+    # --- Register in global SkillRegistry ------------------------------
+    try:
+        from ironclaw.skills.registry import SkillRegistry
+        reg = SkillRegistry()
+        reg.install_from_directory(target)
+        logger.info(
+            "Skill '%s' installed from %s into %s",
+            manifest.name, url, target,
+        )
+    except Exception as exc:
+        # Registry errors don't roll back the clone — skill is on disk and
+        # can be discovered on next server restart.
+        logger.warning("Skill '%s' cloned but registry registration failed: %s", manifest.name, exc)
+
+    return {
+        "status": "installed",
+        "name": manifest.name,
+        "description": manifest.description,
+        "path": str(target),
+    }
 
 # ---------------------------------------------------------------------------
 # HITL Intercept API
 # ---------------------------------------------------------------------------
+
 @app.get("/api/intercepts")
 async def list_intercepts():
-    from ironclaw.core.agent import HITL_PENDING
-    return {"pending": list(HITL_PENDING.keys())}
+    """Return all pending HITL intercepts from the shared SQLite store."""
+    return {"pending": _hitl.list_pending()}
+
+
+@app.get("/api/intercepts/all")
+async def list_all_intercepts(limit: int = 100):
+    """Return recent intercepts regardless of status (for audit UI)."""
+    return {"intercepts": _hitl.list_all(limit=limit)}
+
 
 @app.post("/api/intercepts/{call_id}/resolve")
 async def resolve_intercept(call_id: str, req: HITLResolveRequest):
-    from ironclaw.core.agent import HITL_PENDING
-    if call_id not in HITL_PENDING:
-        raise HTTPException(404, "Intercept not found")
-    
-    event, _ = HITL_PENDING[call_id]
-    HITL_PENDING[call_id] = (event, req.decision)
-    event.set()
-    return {"status": "resolved"}
+    """
+    Resolve a pending HITL intercept.
+
+    The agent loop polls the SQLite store every 500 ms — it will pick up
+    this decision within the next poll cycle regardless of which worker
+    receives this request.
+    """
+    if req.decision not in ("approved", "rejected"):
+        raise HTTPException(400, "decision must be 'approved' or 'rejected'")
+
+    ok = _hitl.resolve(call_id, req.decision)
+    if not ok:
+        raise HTTPException(404, f"Intercept '{call_id}' not found or already resolved")
+
+    return {"status": "resolved", "call_id": call_id, "decision": req.decision}
 
 
 # ---------------------------------------------------------------------------

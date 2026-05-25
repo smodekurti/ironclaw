@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, AsyncIterator
 
 from ironclaw.core.message import ToolCall
 from ironclaw.providers.base import LLMProvider, LLMResponse
@@ -54,15 +54,14 @@ class AnthropicProvider(LLMProvider):
             api_key=api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         )
 
-    async def complete(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-        **kwargs: Any,
-    ) -> LLMResponse:
-        # Split system message from the rest
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _split_messages(
+        self, messages: list[dict[str, Any]]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Convert OpenAI-format messages to Anthropic system + chat lists."""
         system_text = ""
         chat_messages: list[dict[str, Any]] = []
 
@@ -70,7 +69,6 @@ class AnthropicProvider(LLMProvider):
             if msg["role"] == "system":
                 system_text += msg["content"] + "\n"
             elif msg["role"] == "tool":
-                # Convert OpenAI tool result → Anthropic tool_result block
                 chat_messages.append({
                     "role": "user",
                     "content": [
@@ -82,7 +80,6 @@ class AnthropicProvider(LLMProvider):
                     ],
                 })
             elif msg["role"] == "assistant" and "tool_calls" in msg:
-                # Assistant turn that contains tool_use blocks
                 content_blocks: list[dict] = []
                 if msg.get("content"):
                     content_blocks.append({"type": "text", "text": msg["content"]})
@@ -97,7 +94,10 @@ class AnthropicProvider(LLMProvider):
             else:
                 chat_messages.append({"role": msg["role"], "content": msg["content"]})
 
-        # Build Anthropic tool schemas
+        return system_text, chat_messages
+
+    @staticmethod
+    def _build_tool_schemas(tools: list[dict[str, Any]] | None) -> list[dict]:
         anthropic_tools = []
         for t in (tools or []):
             fn = t.get("function", t)
@@ -106,6 +106,22 @@ class AnthropicProvider(LLMProvider):
                 "description": fn.get("description", ""),
                 "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
             })
+        return anthropic_tools
+
+    # ------------------------------------------------------------------
+    # complete() — blocking, returns full LLMResponse
+    # ------------------------------------------------------------------
+
+    async def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        system_text, chat_messages = self._split_messages(messages)
+        anthropic_tools = self._build_tool_schemas(tools)
 
         call_kwargs: dict[str, Any] = dict(
             model=self.model,
@@ -145,3 +161,34 @@ class AnthropicProvider(LLMProvider):
             },
             raw=resp,
         )
+
+    # ------------------------------------------------------------------
+    # stream() — real token-by-token streaming via the Anthropic SDK
+    # Tool-call turns must use complete(); only call stream() for the
+    # final text-only response so the SSE endpoint delivers true chunks.
+    # ------------------------------------------------------------------
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        system_text, chat_messages = self._split_messages(messages)
+
+        call_kwargs: dict[str, Any] = dict(
+            model=self.model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=chat_messages,
+            system=system_text.strip() or None,
+            **kwargs,
+        )
+        # Never pass tools to the streaming call — streaming is text-only.
+        # Tool-call rounds always go through complete().
+
+        async with self._client.messages.stream(**call_kwargs) as s:
+            async for text in s.text_stream:
+                yield text
