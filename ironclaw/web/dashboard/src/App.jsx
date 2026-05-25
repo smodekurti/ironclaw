@@ -88,7 +88,7 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-hidden">
-          {activeTab === 'chat' && <ChatSandbox agents={agents} onAgentCreated={refreshAgents} />}
+          {activeTab === 'chat' && <ChatSandbox />}
           {activeTab === 'nodes' && <VisualNodeBuilder onAgentCreated={refreshAgents} />}
           {activeTab === 'skills' && <SkillMarketplace />}
           {activeTab === 'replay' && <TimeTravelDebugger />}
@@ -120,73 +120,68 @@ const MODELS = {
   ollama: [], // free-text — type your local model name
 };
 
-function ChatSandbox({ agents, onAgentCreated }) {
-  const [selectedAgentId, setSelectedAgentId] = useState('');
+// Persist chat settings to localStorage
+const CHAT_STORAGE_KEY = 'ironclaw_chat_settings';
+function loadChatSettings() {
+  try { return JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '{}'); } catch { return {}; }
+}
+function saveChatSettings(s) {
+  try { localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(s)); } catch {}
+}
+
+function ChatSandbox() {
+  const saved = loadChatSettings();
+  const [provider, setProvider] = useState(saved.provider || 'anthropic');
+  const [model, setModel]       = useState(saved.model    || MODELS.anthropic[0]);
+  const [apiKey, setApiKey]     = useState(saved.api_key  || '');
+  const [systemPrompt, setSystemPrompt] = useState(saved.system_prompt || 'You are a helpful assistant.');
+  const [showSettings, setShowSettings] = useState(false);
   const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
+  const [input, setInput]       = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState('');
   const [ollamaModels, setOllamaModels] = useState([]);
-  const [ollamaLoading, setOllamaLoading] = useState(false);
-  const [form, setForm] = useState({
-    agent_id: '', name: '', system_prompt: 'You are a helpful assistant.',
-    provider: 'anthropic', model: 'claude-sonnet-4-6', api_key: '',
-    tools: [], capabilities: ['*'],
-  });
   const bottomRef = useRef(null);
-  const inputRef = useRef(null);
+  const inputRef  = useRef(null);
 
-  const fetchOllamaModels = async () => {
-    setOllamaLoading(true);
-    try {
-      const res = await fetch('http://localhost:11434/api/tags');
-      const data = await res.json();
-      const names = (data.models || []).map(m => m.name);
-      setOllamaModels(names);
-      if (names.length > 0) setForm(f => ({ ...f, model: names[0] }));
-    } catch {
-      setOllamaModels([]);
-    }
-    setOllamaLoading(false);
-  };
-
+  // Persist whenever settings change
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    saveChatSettings({ provider, model, api_key: apiKey, system_prompt: systemPrompt });
+  }, [provider, model, apiKey, systemPrompt]);
 
-  const createAgent = async () => {
-    if (!form.agent_id.trim()) { setCreateError('Agent ID is required'); return; }
-    setCreating(true); setCreateError('');
-    try {
-      const res = await apiFetch('/api/agents', {
-        method: 'POST', body: JSON.stringify(form),
-      });
-      const data = await res.json();
-      if (!res.ok) { setCreateError(data.detail || 'Failed to create agent'); setCreating(false); return; }
-      setSelectedAgentId(form.agent_id);
-      setMessages([]);
-      setShowCreate(false);
-      onAgentCreated();
-    } catch (e) { setCreateError(String(e)); }
-    setCreating(false);
-  };
+  // Auto-fetch Ollama models when provider is ollama
+  useEffect(() => {
+    if (provider === 'ollama') {
+      fetch('http://localhost:11434/api/tags')
+        .then(r => r.json())
+        .then(d => {
+          const names = (d.models || []).map(m => m.name);
+          setOllamaModels(names);
+          if (names.length > 0 && !names.includes(model)) setModel(names[0]);
+        })
+        .catch(() => setOllamaModels([]));
+    }
+  }, [provider]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   const sendMessage = async () => {
-    if (!input.trim() || !selectedAgentId || streaming) return;
+    if (!input.trim() || streaming) return;
     const text = input.trim();
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: text }]);
+    const history = [...messages, { role: 'user', content: text }];
+    setMessages([...history, { role: 'assistant', content: '' }]);
     setStreaming(true);
-    const assistantIndex = messages.length + 1;
-    setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
     try {
-      const res = await fetch(`/api/agents/${selectedAgentId}/chat`, {
+      const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          messages: history,
+          provider, model,
+          api_key: apiKey,
+          system_prompt: systemPrompt,
+        }),
       });
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -198,25 +193,19 @@ function ChatSandbox({ agents, onAgentCreated }) {
         const parts = buf.split('\n\n');
         buf = parts.pop();
         for (const part of parts) {
-          if (part.startsWith('data: ')) {
-            try {
-              const ev = JSON.parse(part.slice(6));
-              if (ev.type === 'token') {
-                setMessages(prev => {
-                  const updated = [...prev];
-                  const last = updated[updated.length - 1];
-                  updated[updated.length - 1] = { ...last, content: last.content + ev.text };
-                  return updated;
-                });
-              } else if (ev.type === 'error') {
-                setMessages(prev => {
-                  const updated = [...prev];
-                  updated[updated.length - 1] = { role: 'error', content: ev.message };
-                  return updated;
-                });
-              }
-            } catch {}
-          }
+          if (!part.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(part.slice(6));
+            if (ev.type === 'token') {
+              setMessages(prev => {
+                const u = [...prev];
+                u[u.length - 1] = { ...u[u.length - 1], content: u[u.length - 1].content + ev.text };
+                return u;
+              });
+            } else if (ev.type === 'error') {
+              setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'error', content: ev.message }; return u; });
+            }
+          } catch {}
         }
       }
     } catch (e) {
@@ -226,54 +215,74 @@ function ChatSandbox({ agents, onAgentCreated }) {
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
-  const clearHistory = async () => {
-    if (!selectedAgentId) return;
-    await apiFetch(`/api/agents/${selectedAgentId}/clear`, { method: 'POST' });
-    setMessages([]);
-  };
-
   const handleKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
+
+  const modelOptions = provider === 'ollama' ? ollamaModels : (MODELS[provider] || []);
 
   return (
     <div className="h-full flex flex-col">
-      {/* Agent bar */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-borderDark bg-surfaceDark/40 shrink-0">
-        <Bot className="w-4 h-4 text-gray-400 shrink-0" />
-        <select
-          value={selectedAgentId}
-          onChange={e => { setSelectedAgentId(e.target.value); setMessages([]); }}
-          className="flex-1 bg-transparent text-sm text-gray-200 outline-none cursor-pointer"
-        >
-          <option value="">— select an agent —</option>
-          {agents.map(a => (
-            <option key={a.id || a.agent_id} value={a.id || a.agent_id}>{a.name || a.id || a.agent_id}</option>
-          ))}
+      {/* Settings bar */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-borderDark bg-surfaceDark/40 shrink-0 flex-wrap">
+        {/* Provider */}
+        <select value={provider} onChange={e => {
+          const p = e.target.value;
+          setProvider(p);
+          setModel(MODELS[p]?.[0] || '');
+        }} className="bg-bgDark border border-borderDark text-sm text-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-accent/50 cursor-pointer">
+          {PROVIDERS.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
-        {selectedAgentId && (
-          <button onClick={clearHistory} className="text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded border border-borderDark hover:border-gray-500">Clear</button>
+
+        {/* Model */}
+        {modelOptions.length > 0 ? (
+          <select value={model} onChange={e => setModel(e.target.value)}
+            className="bg-bgDark border border-borderDark text-sm text-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-accent/50 cursor-pointer min-w-0 flex-1 max-w-xs">
+            {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        ) : (
+          <input value={model} onChange={e => setModel(e.target.value)}
+            placeholder="model name"
+            className="bg-bgDark border border-borderDark text-sm text-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-accent/50 min-w-0 flex-1 max-w-xs" />
         )}
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-accent text-black text-xs font-semibold rounded-lg hover:bg-accent/80 transition-colors shadow-sm"
-        >
-          <Plus className="w-3.5 h-3.5" /> New Agent
-        </button>
+
+        {/* API Key */}
+        <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+          placeholder={provider === 'ollama' ? 'no key needed' : 'API key'}
+          disabled={provider === 'ollama'}
+          className="bg-bgDark border border-borderDark text-sm text-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-accent/50 w-36 disabled:opacity-40" />
+
+        <div className="flex items-center gap-2 ml-auto">
+          <button onClick={() => setShowSettings(s => !s)}
+            className={`p-1.5 rounded-lg border transition-colors text-xs ${showSettings ? 'border-accent/50 text-accent bg-accent/10' : 'border-borderDark text-gray-400 hover:text-white hover:border-gray-500'}`}
+            title="System prompt">
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+          {messages.length > 0 && (
+            <button onClick={() => setMessages([])}
+              className="p-1.5 rounded-lg border border-borderDark text-gray-400 hover:text-white hover:border-gray-500 transition-colors" title="Clear chat">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* System prompt (collapsible) */}
+      {showSettings && (
+        <div className="px-4 py-2 border-b border-borderDark bg-surfaceDark/20 shrink-0">
+          <textarea value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)}
+            rows={2} placeholder="System prompt…"
+            className="w-full bg-bgDark border border-borderDark rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50 resize-none" />
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {messages.length === 0 && !selectedAgentId && (
+        {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-16 h-16 rounded-full bg-glass border border-glassBorder flex items-center justify-center mb-4">
               <Terminal className="w-7 h-7 text-gray-500" />
             </div>
-            <p className="text-gray-400 text-sm">Select an agent or create one to start chatting</p>
-          </div>
-        )}
-        {messages.length === 0 && selectedAgentId && (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <Zap className="w-8 h-8 text-accent/50 mb-3" />
-            <p className="text-gray-400 text-sm">Send a message to start</p>
+            <p className="text-gray-300 text-sm font-medium mb-1">Ready to chat</p>
+            <p className="text-gray-500 text-xs">Pick a provider and model above, then send a message</p>
           </div>
         )}
         {messages.map((msg, i) => (
@@ -285,100 +294,17 @@ function ChatSandbox({ agents, onAgentCreated }) {
       {/* Input */}
       <div className="shrink-0 border-t border-borderDark px-4 py-3 bg-surfaceDark/30">
         <div className="flex items-end gap-2">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKey}
-            disabled={!selectedAgentId || streaming}
-            rows={1}
-            placeholder={selectedAgentId ? 'Message the agent… (Enter to send)' : 'Select an agent first'}
-            className="flex-1 bg-surfaceDark border border-borderDark rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 outline-none focus:border-accent/50 resize-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ maxHeight: '120px', overflowY: 'auto' }}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={!selectedAgentId || !input.trim() || streaming}
-            className="shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-accent text-black hover:bg-accent/80 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
-          >
+          <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKey} rows={1}
+            placeholder="Message… (Enter to send, Shift+Enter for newline)"
+            className="flex-1 bg-surfaceDark border border-borderDark rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 outline-none focus:border-accent/50 resize-none transition-colors"
+            style={{ maxHeight: '120px', overflowY: 'auto' }} />
+          <button onClick={sendMessage} disabled={!input.trim() || streaming}
+            className="shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-accent text-black hover:bg-accent/80 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm">
             {streaming ? <Loader className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>
         </div>
       </div>
-
-      {/* Create Agent Modal */}
-      {showCreate && (
-        <Modal title="Create New Agent" onClose={() => { setShowCreate(false); setCreateError(''); }}>
-          <div className="space-y-3">
-            <Field label="Agent ID" required>
-              <input value={form.agent_id} onChange={e => setForm(f => ({ ...f, agent_id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') }))}
-                placeholder="my-agent" className={inputCls} />
-            </Field>
-            <Field label="Display Name">
-              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="My Agent" className={inputCls} />
-            </Field>
-            <Field label="Provider">
-              <select value={form.provider} onChange={e => {
-                const p = e.target.value;
-                const defaultModel = MODELS[p]?.[0] || '';
-                setForm(f => ({ ...f, provider: p, model: defaultModel }));
-                if (p === 'ollama') fetchOllamaModels();
-              }} className={inputCls}>
-                {PROVIDERS.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </Field>
-            <Field label={form.provider === 'ollama' ? `Model ${ollamaLoading ? '(loading…)' : ollamaModels.length ? `(${ollamaModels.length} found)` : '(type manually)'}` : 'Model'}>
-              {form.provider === 'ollama' ? (
-                ollamaModels.length > 0 ? (
-                  <select value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} className={inputCls}>
-                    {ollamaModels.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                ) : (
-                  <div className="space-y-1">
-                    <input value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
-                      placeholder="e.g. llama3.3:70b, gemma4:latest" className={inputCls} />
-                    <button type="button" onClick={fetchOllamaModels} className="text-xs text-accent hover:underline">
-                      ↻ Refresh from Ollama
-                    </button>
-                  </div>
-                )
-              ) : (
-                <select value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} className={inputCls}>
-                  {(MODELS[form.provider] || []).map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              )}
-            </Field>
-            <Field label="API Key">
-              <input type="password" value={form.api_key} onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
-                placeholder="sk-… (leave blank to use env var)" className={inputCls} />
-            </Field>
-            <Field label="System Prompt">
-              <textarea value={form.system_prompt} onChange={e => setForm(f => ({ ...f, system_prompt: e.target.value }))}
-                rows={3} className={inputCls + ' resize-none'} />
-            </Field>
-            <Field label="Tools">
-              <div className="flex gap-3">
-                {['web', 'filesystem', 'shell'].map(t => (
-                  <label key={t} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
-                    <input type="checkbox" checked={form.tools.includes(t)}
-                      onChange={e => setForm(f => ({ ...f, tools: e.target.checked ? [...f.tools, t] : f.tools.filter(x => x !== t) }))}
-                      className="accent-accent" />
-                    {t}
-                  </label>
-                ))}
-              </div>
-            </Field>
-            {createError && <p className="text-red-400 text-xs">{createError}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => { setShowCreate(false); setCreateError(''); }} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
-              <button onClick={createAgent} disabled={creating} className="px-4 py-2 text-sm bg-accent text-black font-semibold rounded-lg hover:bg-accent/80 disabled:opacity-50 transition-colors">
-                {creating ? 'Creating…' : 'Create Agent'}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 }
